@@ -19,7 +19,8 @@
 #include "hphp/runtime/ext/xdebug/php5_xdebug/xdebug_str.h"
 
 #include "hphp/runtime/base/base-includes.h"
-#include "hphp/runtime/ext/ext_datetime.h"
+#include "hphp/runtime/base/externals.h"
+#include "hphp/runtime/ext/datetime/ext_datetime.h"
 #include "hphp/runtime/ext/std/ext_std_file.h"
 #include "hphp/runtime/ext/url/ext_url.h"
 

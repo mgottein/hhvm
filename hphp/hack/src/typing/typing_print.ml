@@ -53,6 +53,15 @@ module ErrorString = struct
     | Tapply ((_, x), _) -> "an object of type "^(strip_ns x)
     | Tobject            -> "an object"
     | Tshape _           -> "a shape"
+    | Taccess (root, id, ids) ->
+        let root_str =
+          match root with
+          | SCI (_, class_id) -> class_id
+          | SCIstatic -> "static"
+        in
+        let base_str = "a value of type " ^ root_str in
+        let idl = id :: ids in
+        List.fold_left (fun acc (_, sid) -> acc ^ "::" ^ sid) base_str idl
 
   and array = function
     | None, None     -> "an array"
@@ -103,7 +112,7 @@ module Suggest = struct
     | Toption ty             -> "?" ^ type_ ty
     | Tprim tp               -> prim tp
     | Tvar _                 -> "..."
-    | Tanon _ | Tfun _       -> "..."
+    | Tanon _ | Tfun _ -> "..."
     | Tapply ((_, cid), [])  -> Utils.strip_ns cid
     | Tapply ((_, cid), [x]) -> (Utils.strip_ns cid)^"<"^type_ x^">"
     | Tapply ((_, cid), l)   -> (Utils.strip_ns cid)^"<"^list l^">"
@@ -112,6 +121,14 @@ module Suggest = struct
     | Tabstract ((_, cid), l, _)   -> (Utils.strip_ns cid)^"<"^list l^">"
     | Tobject                -> "..."
     | Tshape _               -> "..."
+    | Taccess (root, id, ids) ->
+        let root_str =
+          match root with
+          | SCI (_, class_id) -> class_id
+          | SCIstatic -> "static"
+        in
+        let idl = id :: ids in
+        List.fold_left (fun acc (_, sid) -> acc ^ "::" ^ sid) root_str idl
 
   and list = function
     | []      -> ""
@@ -158,6 +175,16 @@ module Full = struct
     | Tabstract ((_, s), [], _)
     | Tapply ((_, s), [])
     | Tgeneric (s, _) -> o s
+    | Taccess (root, id, ids) ->
+        let root_str =
+          match root with
+          | SCI (_, class_id) -> class_id
+          | SCIstatic -> "static"
+        in
+        let idl = id :: ids in
+        let s =
+          List.fold_left (fun acc (_, sid) -> acc ^ "::" ^ sid) root_str idl in
+        o s
     | Toption x -> o "?"; k x
     | Tprim x -> prim o x
     | Tvar n when ISet.mem n st -> o "[rec]"
@@ -331,6 +358,7 @@ module PrintClass = struct
     let tc_name = c.tc_name in
     let tc_tparams = tparam_list c.tc_tparams in
     let tc_consts = class_elt_smap c.tc_consts in
+    let tc_typeconsts = class_elt_smap c.tc_typeconsts in
     let tc_cvars = class_elt_smap c.tc_cvars in
     let tc_scvars = class_elt_smap c.tc_scvars in
     let tc_methods = class_elt_smap_with_breaks c.tc_methods in
@@ -351,6 +379,7 @@ module PrintClass = struct
     "tc_name: "^tc_name^"\n"^
     "tc_tparams: "^tc_tparams^"\n"^
     "tc_consts: "^tc_consts^"\n"^
+    "tc_typeconsts: "^tc_typeconsts^"\n"^
     "tc_cvars: "^tc_cvars^"\n"^
     "tc_scvars: "^tc_scvars^"\n"^
     "tc_methods: "^tc_methods^"\n"^
@@ -404,6 +433,27 @@ module PrintFun = struct
     ""
 end
 
+module PrintTypedef = struct
+
+  let tenv = PrintClass.tenv
+
+  let typedef = function
+    | Typing_env.Typedef.Error -> "[Error]"
+    | Typing_env.Typedef.Ok (_vis, tparaml, constr_opt, ty, pos) ->
+      let tparaml_s = PrintClass.tparam_list tparaml in
+      let constr_s = match constr_opt with
+        | None -> "[None]"
+        | Some constr -> Full.to_string tenv constr in
+      let ty_s = Full.to_string tenv ty in
+      let pos_s = PrintClass.pos pos in
+      "ty: "^ty_s^"\n"^
+      "tparaml: "^tparaml_s^"\n"^
+      "constraint: "^constr_s^"\n"^
+      "pos: "^pos_s^"\n"^
+      ""
+
+end
+
 (*****************************************************************************)
 (* User API *)
 (*****************************************************************************)
@@ -413,4 +463,6 @@ let suggest ty = Suggest.type_ ty
 let full env ty = Full.to_string env ty
 let full_strip_ns env ty = Full.to_string_strip_ns env ty
 let class_ c = PrintClass.class_type c
+let gconst gc = Full.to_string PrintClass.tenv gc
 let fun_ f = PrintFun.fun_type f
+let typedef td = PrintTypedef.typedef td

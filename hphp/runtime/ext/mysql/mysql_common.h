@@ -18,7 +18,7 @@
 #ifndef incl_HPHP_MYSQL_COMMON_H_
 #define incl_HPHP_MYSQL_COMMON_H_
 
-#include "folly/Optional.h"
+#include <folly/Optional.h>
 #include <vector>
 
 #include "hphp/runtime/base/base-includes.h"
@@ -59,18 +59,16 @@ public:
   /**
    * A connection may be persistent across multiple HTTP requests.
    */
-  static MySQL *GetPersistent(const String& host, int port, const String& socket,
-                              const String& username, const String& password,
-                              int client_flags) {
-    return GetCachedImpl("mysql::persistent_conns", host, port, socket,
-                         username, password, client_flags);
+  static MySQL *GetPersistent(const String& host, int port,
+                              const String& socket, const String& username,
+                              const String& password, int client_flags) {
+    return GetCachedImpl(host, port, socket, username, password, client_flags);
   }
 
   static void SetPersistent(const String& host, int port, const String& socket,
                             const String& username, const String& password,
                             int client_flags, MySQL *conn) {
-    SetCachedImpl("mysql::persistent_conns", host, port, socket,
-                  username, password, client_flags, conn);
+    SetCachedImpl(host, port, socket, username, password, client_flags, conn);
   }
 
   /**
@@ -85,16 +83,20 @@ public:
 private:
   static int s_default_port;
 
-  static String GetHash(const String& host, int port, const String& socket,
-                        const String& username, const String& password, int client_flags);
+  static std::string GetHash(const String& host, int port, const String& socket,
+                             const String& username, const String& password,
+                             int client_flags);
 
-  static MySQL *GetCachedImpl(const char *name, const String& host, int port,
+  static MySQL *GetCachedImpl(const String& host, int port,
                               const String& socket, const String& username,
                               const String& password, int client_flags);
 
-  static void SetCachedImpl(const char *name, const String& host, int port,
-                            const String& socket, const String& username, const String& password,
-                            int client_flags, MySQL *conn);
+  static void SetCachedImpl(const String& host, int port, const String& socket,
+                            const String& username, const String& password,
+                            int client_flags, MySQL* conn);
+
+public:
+  static size_t NumCachedConnections();
 
 public:
   MySQL(const char *host, int port, const char *username,
@@ -131,6 +133,7 @@ public:
   }
 
 private:
+  static const std::string s_persistent_type;
   MYSQL *m_conn;
 
 public:

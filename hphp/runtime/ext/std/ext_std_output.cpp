@@ -18,6 +18,8 @@
 #include "hphp/runtime/ext/std/ext_std_output.h"
 #include "hphp/runtime/server/server-stats.h"
 #include "hphp/runtime/ext/json/ext_json.h"
+#include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/hardware-counter.h"
 #include "hphp/runtime/vm/vm-regs.h"
@@ -45,7 +47,7 @@ const int64_t k_PHP_OUTPUT_HANDLER_STDFLAGS =
 bool HHVM_FUNCTION(ob_start, const Variant& callback /* = null */,
                              int chunk_size /* = 0 */,
                              int flags /* = k_PHP_OUTPUT_HANDLER_STDFLAGS */) {
-  // ignoring chunk_size and flags for now
+  // ignoring flags for now
 
   if (!callback.isNull()) {
     CallCtx ctx;
@@ -54,7 +56,7 @@ bool HHVM_FUNCTION(ob_start, const Variant& callback /* = null */,
       return false;
     }
   }
-  g_context->obStart(callback);
+  g_context->obStart(callback, chunk_size);
   return true;
 }
 void HHVM_FUNCTION(ob_clean) {

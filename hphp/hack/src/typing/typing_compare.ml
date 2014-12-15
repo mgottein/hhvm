@@ -118,6 +118,15 @@ module CompareTypes = struct
         let acc = string_id acc sid1 sid2 in
         let acc = tyl acc tyl1 tyl2 in
         acc
+    | Taccess (rt1, id1, ids1), Taccess (rt2, id2, ids2)
+      when List.length ids1 = List.length ids2 ->
+        let acc =
+          match rt1, rt2 with
+          | SCIstatic, SCIstatic -> acc
+          | SCI rt1_id, SCI rt2_id -> string_id acc rt1_id rt2_id
+          | SCIstatic, _ | SCI _, _ -> default
+        in
+        List.fold_left2 string_id acc (id1 :: ids1) (id2 :: ids2)
     | Tunresolved tyl1, Tunresolved tyl2
     | Ttuple tyl1, Ttuple tyl2 ->
         tyl acc tyl1 tyl2
@@ -130,9 +139,9 @@ module CompareTypes = struct
           | Some v2 ->
               ty acc v1 v2
         end fdm1 acc
-    | (Tanon _ | Tany | Tmixed | Tarray (_, _) | Tshape _ |
-      Tgeneric (_, _)|Toption _|Tprim _|Tvar _| Tabstract _ |
-      Tfun _|Tapply (_, _)|Ttuple _|Tunresolved _|Tobject), _ -> default
+    | (Tanon _ | Tany | Tmixed | Tarray (_, _) | Tshape _ | Taccess (_, _, _) |
+      Tgeneric (_, _)| Toption _| Tprim _| Tvar _| Tabstract _ |
+      Tfun _| Tapply (_, _) | Ttuple _| Tunresolved _| Tobject), _ -> default
 
   and tyl acc tyl1 tyl2 =
     if List.length tyl1 <> List.length tyl2
@@ -192,6 +201,7 @@ module CompareTypes = struct
   and class_elt (subst, same) celt1 celt2 =
     let same = same && celt1.ce_visibility = celt2.ce_visibility in
     let same = same && celt1.ce_final = celt2.ce_final in
+    let same = same && celt1.ce_is_xhp_attr = celt2.ce_is_xhp_attr in
     let same = same && celt1.ce_override = celt2.ce_override in
     let same = same && celt1.ce_synthesized = celt2.ce_synthesized in
     ty (subst, same) celt1.ce_type celt2.ce_type
@@ -231,6 +241,7 @@ module CompareTypes = struct
     let acc = members acc c1.tc_scvars c2.tc_scvars in
     let acc = members acc c1.tc_methods c2.tc_methods in
     let acc = members acc c1.tc_smethods c2.tc_smethods in
+    let acc = members acc c1.tc_typeconsts c2.tc_typeconsts in
     let acc = constructor acc c1.tc_construct c2.tc_construct in
     let acc = ancestry acc c1.tc_req_ancestors c2.tc_req_ancestors in
     let acc = ancestry acc c1.tc_ancestors c2.tc_ancestors in
@@ -319,6 +330,13 @@ module TraversePos(ImplementPos: sig val pos: Pos.t -> Pos.t end) = struct
     | Toption x            -> Toption (ty x)
     | Tfun ft              -> Tfun (fun_type ft)
     | Tapply (sid, xl)     -> Tapply (string_id sid, List.map (ty) xl)
+    | Taccess (root, id, ids) ->
+        let new_root =
+          match root with
+          | SCIstatic -> root
+          | SCI sid -> SCI (string_id sid)
+        in
+        Taccess (new_root, string_id id, List.map string_id ids)
     | Tabstract (sid, xl, x) ->
         Tabstract (string_id sid, List.map (ty) xl, ty_opt x)
     | Tobject as x         -> x
@@ -338,6 +356,7 @@ module TraversePos(ImplementPos: sig val pos: Pos.t -> Pos.t end) = struct
 
   and class_elt ce =
     { ce_final       = ce.ce_final      ;
+      ce_is_xhp_attr = ce.ce_is_xhp_attr;
       ce_override    = ce.ce_override   ;
       ce_synthesized = ce.ce_synthesized;
       ce_visibility  = ce.ce_visibility ;
@@ -362,6 +381,7 @@ module TraversePos(ImplementPos: sig val pos: Pos.t -> Pos.t end) = struct
       tc_req_ancestors_extends = tc.tc_req_ancestors_extends          ;
       tc_tparams               = List.map type_param tc.tc_tparams    ;
       tc_consts                = SMap.map class_elt tc.tc_consts      ;
+      tc_typeconsts            = SMap.map class_elt tc.tc_typeconsts  ;
       tc_cvars                 = SMap.map class_elt tc.tc_cvars       ;
       tc_scvars                = SMap.map class_elt tc.tc_scvars      ;
       tc_methods               = SMap.map class_elt tc.tc_methods     ;
@@ -417,9 +437,9 @@ module ClassDiff = struct
   type t = {
       consts   : SSet.t ;
       cvars    : SSet.t ;
-      scvars   : SSet.t ;
       methods  : SSet.t ;
       smethods : SSet.t ;
+      typeconsts : SSet.t;
       cstr     : bool   ;
     }
 
@@ -478,6 +498,12 @@ module ClassDiff = struct
     let cstr_ideps = Typing_deps.get_ideps (Dep.Cstr cid) in
     let acc = if cstr_diff then ISet.union acc cstr_ideps else acc in
 
+    (* compare class type constants *)
+    let typeconsts_diff = smap class1.tc_typeconsts class2.tc_typeconsts in
+    let is_unchanged = is_unchanged && SSet.is_empty typeconsts_diff in
+    let acc =
+      add_inverted_deps acc (fun x -> Dep.Class (cid^"::"^x)) typeconsts_diff in
+
     acc, is_unchanged
 
 end
@@ -505,7 +531,11 @@ let class_big_diff class1 class2 =
   SMap.compare class1.tc_req_ancestors class2.tc_req_ancestors <> 0 ||
   SSet.compare class1.tc_req_ancestors_extends class2.tc_req_ancestors_extends <> 0 ||
   SSet.compare class1.tc_extends class2.tc_extends <> 0 ||
-  class1.tc_enum_type <> class2.tc_enum_type
+  class1.tc_enum_type <> class2.tc_enum_type ||
+  (* due to, e.g. switch exhaustiveness checks, a change in an enum's
+   * constant set is a "big" difference *)
+    (class1.tc_enum_type <> None &&
+       not (SSet.is_empty (ClassDiff.smap class1.tc_consts class2.tc_consts)))
 
 (*****************************************************************************)
 (* Given a class name adds all the subclasses, we need a "trace" to follow

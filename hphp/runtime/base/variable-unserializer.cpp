@@ -17,6 +17,7 @@
 #include "hphp/runtime/base/variable-unserializer.h"
 #include <algorithm>
 #include "hphp/runtime/base/complex-types.h"
+#include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/zend-strtod.h"
 #include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/ext/std/ext_std_classobj.h"
@@ -41,12 +42,28 @@ Variant VariableUnserializer::unserializeKey() {
   return v;
 }
 
+static std::pair<int64_t,const char*> hh_strtoll_base10(const char* p) {
+  int64_t x = 0;
+  bool neg = false;
+  if (*p == '-') {
+    neg = true;
+    ++p;
+  }
+  while (*p >= '0' && *p <= '9') {
+    x = (x * 10) + ('0' - *p);
+    ++p;
+  }
+  if (!neg) {
+    x = -x;
+  }
+  return std::pair<int64_t,const char*>(x, p);
+}
+
 int64_t VariableUnserializer::readInt() {
   check();
-  char *newBuf;
-  int64_t r = strtoll(m_buf, &newBuf, 10);
-  m_buf = newBuf;
-  return r;
+  auto r = hh_strtoll_base10(m_buf);
+  m_buf = r.second;
+  return r.first;
 }
 
 double VariableUnserializer::readDouble() {

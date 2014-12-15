@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2013 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-2014 Facebook, Inc. (http://www.facebook.com)     |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -27,6 +27,7 @@
 #include "hphp/runtime/vm/jit/service-requests.h"
 #include "hphp/runtime/vm/jit/target-cache.h"
 #include "hphp/runtime/vm/jit/vasm.h"
+#include "hphp/runtime/vm/jit/vasm-reg.h"
 #include "hphp/runtime/vm/srckey.h"
 #include "hphp/util/asm-x64.h"
 
@@ -45,86 +46,12 @@ namespace HPHP { namespace jit {
 enum class DestType : uint8_t {
   None,  // return void (no valid registers)
   SSA,   // return a single-register value
+  Byte,  // return a single-byte register value
   TV,    // return a TypedValue packed in two registers
   Dbl,   // return scalar double in a single FP register
   SIMD,  // return a TypedValue in one SIMD register
 };
 const char* destTypeName(DestType);
-
-struct Vptr;
-struct Vscaled;
-
-// Vreg is like physreg, but numbers go beyond the physical register names.
-// Since it is unconstrained, it has predicates to test whether rn is
-// a gpr, xmm, or virtual register.
-struct Vreg {
-  static constexpr auto kind = VregKind::Any;
-  static const unsigned kNumGP{PhysReg::kSIMDOffset}; // 33
-  static const unsigned kNumXMM{30};
-  static const unsigned kNumSF{1};
-  static const unsigned G0{0};
-  static const unsigned X0{kNumGP};
-  static const unsigned S0{X0+kNumXMM};
-  static const unsigned V0{S0+kNumSF};
-  static const unsigned kInvalidReg{0xffffffffU};
-  Vreg() : rn(kInvalidReg) {}
-  explicit Vreg(size_t r) : rn(r) {}
-  /* implicit */ Vreg(Reg64 r) : rn(int(r)) {}
-  /* implicit */ Vreg(Reg32 r) : rn(int(r)) {}
-  /* implicit */ Vreg(Reg8 r) : rn(int(r)) {}
-  /* implicit */ Vreg(RegXMM r) : rn(X0+int(r)) {}
-  /* implicit */ Vreg(RegSF r) : rn(S0+int(r)) {}
-  /* implicit */ Vreg(PhysReg r) {
-    rn = (r == InvalidReg) ? kInvalidReg :
-         r.isGP() ? G0+int(Reg64(r)) :
-          r.isSIMD() ? X0+int(RegXMM(r)) :
-          /* r.isSF() ? */ S0+int(RegSF(r));
-  }
-  /* implicit */ operator size_t() const { return rn; }
-  /* implicit */ operator Reg64() const {
-    assert(isGP());
-    return Reg64(rn - G0);
-  }
-  /* implicit */ operator RegXMM() const {
-    assert(isSIMD());
-    return RegXMM(rn - X0);
-  }
-  /* implicit */ operator RegSF() const {
-    assert(isSF());
-    return RegSF(rn - S0);
-  }
-  /* implicit */ operator PhysReg() const { return physReg(); }
-  bool isPhys() const {
-    static_assert(G0 < V0 && X0 < V0 && S0 < V0 && V0 < kInvalidReg, "");
-    return rn < V0;
-  }
-  bool isGP() const { return /* rn >= G0 && */ rn < G0+kNumGP; }
-  bool isSIMD() const { return rn >= X0 && rn < X0+kNumXMM; }
-  bool isSF() const { return rn >= S0 && rn < S0+kNumSF; }
-  bool isVirt() const { return rn >= V0 && isValid(); }
-  bool isValid() const { return rn != kInvalidReg; }
-  bool operator==(Vreg r) const { return rn == r.rn; }
-  bool operator!=(Vreg r) const { return rn != r.rn; }
-  PhysReg physReg() const {
-    assert(!isValid() || isPhys());
-    return !isValid() ? InvalidReg :
-           isGP() ? PhysReg(/* implicit */operator Reg64()) :
-           isSIMD() ? PhysReg(/* implicit */operator RegXMM()) :
-           /* isSF() ? */ PhysReg(/* implicit */operator RegSF());
-  }
-  Vptr operator[](int disp) const;
-  Vptr operator[](ScaledIndex) const;
-  Vptr operator[](ScaledIndexDisp) const;
-  Vptr operator[](Vptr) const;
-  Vptr operator[](DispReg) const;
-  Vptr operator*() const;
-  Vptr operator[](Vscaled) const;
-  Vscaled operator*(int scale) const;
-  Vptr operator[](Vreg) const;
-  Vptr operator+(size_t d) const;
-private:
-  unsigned rn{kInvalidReg};
-};
 
 // instantiations of this wrap virtual register numbers in in a strongly
 // typed wrapper that conveys physical constraints, similar to Reg64,
@@ -374,13 +301,13 @@ inline Vptr Vr<Reg,Kind,Bits>::operator+(size_t d) const {
   O(bindjmp, I(target) I(trflags), U(args), Dn)\
   O(callstub, I(target) I(kills) I(fix), U(args), Dn)\
   O(contenter, Inone, U(fp) U(target) U(args), Dn)\
-  O(retransopt, I(sk) I(id), U(args), Dn)\
   /* vasm intrinsics */\
   O(copy, Inone, UH(s,d), DH(d,s))\
   O(copy2, Inone, UH(s0,d0) UH(s1,d1), DH(d0,s0) DH(d1,s1))\
   O(copyargs, Inone, UH(s,d), DH(d,s))\
   O(debugtrap, Inone, Un, Dn)\
   O(fallthru, Inone, Un, Dn)\
+  O(ldimmb, I(s) I(saveflags), Un, D(d))\
   O(ldimm, I(s) I(saveflags), Un, D(d))\
   O(fallback, I(dest), U(args), Dn)\
   O(fallbackcc, I(cc) I(dest), U(sf) U(args), Dn)\
@@ -403,10 +330,13 @@ inline Vptr Vr<Reg,Kind,Bits>::operator+(size_t d) const {
   O(landingpad, Inone, Un, Dn)\
   O(defvmsp, Inone, Un, D(d))\
   O(syncvmsp, Inone, U(s), Dn)\
-  O(syncvmfp, Inone, U(s), Dn)\
   O(srem, Inone, U(s0) U(s1), D(d))\
   O(sar, Inone, U(s0) U(s1), D(d) D(sf))\
   O(shl, Inone, U(s0) U(s1), D(d) D(sf))\
+  O(ldretaddr, Inone, U(s), D(d))\
+  O(movretaddr, Inone, U(s), D(d))\
+  O(retctrl, Inone, U(s), Dn)\
+  O(absdbl, Inone, U(s), D(d))\
   /* arm instructions */\
   O(asrv, Inone, U(sl) U(sr), D(d))\
   O(brk, I(code), Un, Dn)\
@@ -472,13 +402,17 @@ inline Vptr Vr<Reg,Kind,Bits>::operator+(size_t d) const {
   O(lea, Inone, U(s), D(d))\
   O(leap, I(s), Un, D(d))\
   O(loaddqu, Inone, U(s), D(d))\
+  O(loadb, Inone, U(s), D(d))\
   O(loadl, Inone, U(s), D(d))\
   O(loadqp, I(s), Un, D(d))\
   O(loadsd, Inone, U(s), D(d))\
   O(loadzbl, Inone, U(s), D(d))\
+  O(loadzbq, Inone, U(s), D(d))\
+  O(loadzlq, Inone, U(s), D(d))\
   O(movb, Inone, UH(s,d), DH(d,s))\
   O(movl, Inone, UH(s,d), DH(d,s))\
   O(movzbl, Inone, UH(s,d), DH(d,s))\
+  O(movzbq, Inone, UH(s,d), DH(d,s))\
   O(mulsd, Inone, U(s0) U(s1), D(d))\
   O(mul, Inone, U(s0) U(s1), D(d))\
   O(neg, Inone, UH(s,d), DH(d,s) D(sf))\
@@ -492,13 +426,11 @@ inline Vptr Vr<Reg,Kind,Bits>::operator+(size_t d) const {
   O(psllq, I(s0), UH(s1,d), DH(d,s1))\
   O(psrlq, I(s0), UH(s1,d), DH(d,s1))\
   O(push, Inone, U(s), Dn)\
-  O(pushl, Inone, U(s), Dn)\
   O(pushm, Inone, U(s), Dn)\
   O(ret, Inone, U(args), Dn)\
   O(roundsd, I(dir), U(s), D(d))\
   O(sarq, Inone, UH(s,d), DH(d,s) D(sf))\
   O(sarqi, I(s0), UH(s1,d), DH(d,s1) D(sf))\
-  O(sbbl, Inone, U(sfu) UA(s0) U(s1), D(d) D(sfd))\
   O(setcc, I(cc), U(sf), D(d))\
   O(shlli, I(s0), UH(s1,d), DH(d,s1) D(sf))\
   O(shlq, Inone, UH(s,d), DH(d,s) D(sf))\
@@ -515,6 +447,7 @@ inline Vptr Vr<Reg,Kind,Bits>::operator+(size_t d) const {
   O(storesd, Inone, U(s) U(m), Dn)\
   O(storew, Inone, U(s) U(m), Dn)\
   O(storewi, I(s), U(m), Dn)\
+  O(subbi, I(s0), UH(s1,d), DH(d,s1) D(sf))\
   O(subl, Inone, UA(s0) U(s1), D(d) D(sf))\
   O(subli, I(s0), UH(s1,d), DH(d,s1) D(sf))\
   O(subq, Inone, UA(s0) U(s1), D(d) D(sf))\
@@ -548,7 +481,6 @@ struct bindjcc2nd { ConditionCode cc; VregSF sf; Offset target; RegSet args; };
 struct bindjmp { SrcKey target; TransFlags trflags; RegSet args; };
 struct callstub { CodeAddress target; RegSet args, kills; Fixup fix; };
 struct contenter { Vreg64 fp, target; RegSet args; };
-struct retransopt { SrcKey sk; TransID id; RegSet args; };
 struct vcall { CppCall call; VcallArgsId args; Vtuple d;
                Fixup fixup; DestType destType; bool nothrow; };
 struct vinvoke { CppCall call; VcallArgsId args; Vtuple d; Vlabel targets[2];
@@ -557,12 +489,17 @@ struct copy { Vreg s, d; };
 struct copy2 { Vreg64 s0, s1, d0, d1; };
 struct copyargs { Vtuple s, d; };
 struct debugtrap {};
+struct ldretaddr { Vptr s; Vreg d; };
+struct movretaddr { Vreg s, d; };
+struct retctrl { Vreg s; };
+struct absdbl { Vreg s, d; };
 
 // No-op, used for marking the end of a block that is intentionally going to
 // fall-through.  Only for use with Vauto.
 struct fallthru {};
 
-struct ldimm { Immed64 s; Vreg d; bool saveflags; };
+struct ldimmb { Immed s; Vreg8 d; bool saveflags; };
+struct ldimm  { Immed64 s; Vreg d; bool saveflags; };
 struct fallback { SrcKey dest; TransFlags trflags; RegSet args; };
 struct fallbackcc { ConditionCode cc; VregSF sf; SrcKey dest;
                     TransFlags trflags; RegSet args; };
@@ -582,9 +519,15 @@ struct svcreq { ServiceRequest req; Vtuple args; TCA stub_block; };
 struct syncpoint { Fixup fix; };
 struct unwind { Vlabel targets[2]; };
 struct landingpad {};
+
+/* Copy rVmSp into d. Used when reentering translated code after an ABI
+ * boundary, such as the beginning of a tracelet or right after a bindcall. */
 struct defvmsp { Vreg d; };
+
+/* Copy s into rVmSp. Used right before leaving translated code for an ABI
+ * boundary, such as bindjmp or fallbackcc. */
 struct syncvmsp { Vreg s; };
-struct syncvmfp { Vreg s; };
+
 struct srem { Vreg s0, s1, d; };
 struct sar { Vreg s0, s1, d; VregSF sf; };
 struct shl { Vreg s0, s1, d; VregSF sf; };
@@ -672,13 +615,17 @@ struct jmpm { Vptr target; RegSet args; };
 struct lea { Vptr s; Vreg64 d; };
 struct leap { RIPRelativeRef s; Vreg64 d; };
 struct loaddqu { Vptr s; Vreg128 d; };
+struct loadb { Vptr s; Vreg8 d; };
 struct loadl { Vptr s; Vreg32 d; };
 struct loadqp { RIPRelativeRef s; Vreg64 d; };
 struct loadsd { Vptr s; VregDbl d; };
 struct loadzbl { Vptr s; Vreg32 d; };
+struct loadzbq { Vptr s; Vreg64 d; };
+struct loadzlq { Vptr s; Vreg64 d; };
 struct movb { Vreg8 s, d; };
 struct movl { Vreg32 s, d; };
 struct movzbl { Vreg8 s; Vreg32 d; };
+struct movzbq { Vreg8 s; Vreg64 d; };
 struct mulsd  { VregDbl s0, s1, d; };
 struct neg { Vreg64 s, d; VregSF sf; };
 struct nop {};
@@ -691,13 +638,11 @@ struct popm { Vptr m; };
 struct psllq { Immed s0; VregDbl s1, d; };
 struct psrlq { Immed s0; VregDbl s1, d; };
 struct push { Vreg64 s; };
-struct pushl { Vreg32 s; };
 struct pushm { Vptr s; };
 struct ret { RegSet args; };
 struct roundsd { RoundDirection dir; VregDbl s, d; };
 struct sarq { Vreg64 s, d; VregSF sf; }; // uses rcx
 struct sarqi { Immed s0; Vreg64 s1, d; VregSF sf; };
-struct sbbl { VregSF sfu; Vreg32 s0, s1, d; VregSF sfd; };
 struct setcc { ConditionCode cc; VregSF sf; Vreg8 d; };
 struct shlli { Immed s0; Vreg32 s1, d; VregSF sf; };
 struct shlq { Vreg64 s, d; VregSF sf; }; // uses rcx
@@ -714,6 +659,7 @@ struct storeqi { Immed s; Vptr m; };
 struct storesd { VregDbl s; Vptr m; };
 struct storew { Vreg16 s; Vptr m; };
 struct storewi { Immed s; Vptr m; };
+struct subbi { Immed s0; Vreg8 s1, d; VregSF sf; };
 struct subl { Vreg32 s0, s1, d; VregSF sf; };
 struct subli { Immed s0; Vreg32 s1, d; VregSF sf; };
 struct subq { Vreg64 s0, s1, d; VregSF sf; };
@@ -856,6 +802,7 @@ struct Vunit {
   Vtuple makeTuple(const VregList& regs);
   VcallArgsId makeVcallArgs(VcallArgs&& args);
 
+  Vreg makeConst(bool);
   Vreg makeConst(uint64_t);
   Vreg makeConst(double);
   Vreg makeConst(const void* p) { return makeConst(uint64_t(p)); }
@@ -880,7 +827,39 @@ struct Vunit {
   unsigned next_point{0};
   Vlabel entry;
   jit::vector<Vblock> blocks;
-  jit::hash_map<uint64_t,Vreg> cpool;
+
+  /*
+   * Vasm constant: 1 or 8 byte unsigned value.
+   */
+  struct Cns {
+    struct Hash {
+      size_t operator()(Cns c) const {
+        return std::hash<uint64_t>()(c.val) ^ c.isByte;
+      }
+    };
+
+    Cns()
+      : val(0), isByte(false)
+    {}
+
+    /* implicit */ Cns(bool b)
+      : val(b), isByte(true) {}
+
+    /* implicit */ Cns(uint8_t b)
+      : val(b), isByte(true) {}
+
+    /* implicit */ Cns(uint64_t i)
+      : val(i), isByte(false) {}
+
+    bool operator==(Cns other) const {
+      return val == other.val && isByte == other.isByte;
+    }
+
+    uint64_t val;
+    bool isByte;
+  };
+
+  jit::hash_map<Cns,Vreg,Cns::Hash> cpool;
   jit::vector<VregList> tuples;
   jit::vector<VcallArgs> vcallArgs;
 };
@@ -940,7 +919,7 @@ struct Vasm {
     CodeBlock& code;
     CodeAddress start;
   };
-  typedef jit::vector<Area> AreaList;
+  using AreaList = jit::vector<Area>;
 
   explicit Vasm() {
     m_areas.reserve(size_t(AreaIndex::Max));
@@ -962,7 +941,7 @@ struct Vasm {
   Vout& cold(X64Assembler& a) { return cold(a.code()); }
   Vout& frozen(X64Assembler& a) { return frozen(a.code()); }
   Vunit& unit() { return m_unit; }
-  jit::vector<Area>& areas() { return m_areas; }
+  AreaList& areas() { return m_areas; }
 
 private:
   Vout& add(CodeBlock &cb, AreaIndex area);
@@ -973,7 +952,7 @@ private:
 
 private:
   Vunit m_unit;
-  jit::vector<Area> m_areas; // indexed by AreaIndex
+  AreaList m_areas; // indexed by AreaIndex
 };
 
 /*

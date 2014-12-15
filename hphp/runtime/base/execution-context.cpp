@@ -61,7 +61,7 @@ IMPLEMENT_THREAD_LOCAL_NO_CHECK(ExecutionContext, g_context);
 
 ExecutionContext::ExecutionContext()
   : m_transport(nullptr)
-  , m_out(nullptr)
+  , m_sb(nullptr)
   , m_implicitFlush(false)
   , m_protectedLevel(0)
   , m_stdout(nullptr)
@@ -103,6 +103,9 @@ ExecutionContext::ExecutionContext()
     ThreadInfo::s_threadInfo.getNoCheck()->m_reqInjectionData.
       setErrorReportingLevel(RuntimeOption::RuntimeErrorReportingLevel);
   }
+
+  VariableSerializer::serializationSizeLimit =
+    RuntimeOption::SerializationSizeLimit;
 }
 
 template<> void ThreadLocalNoCheck<ExecutionContext>::destroy() {
@@ -230,8 +233,13 @@ size_t ExecutionContext::getStdoutBytesWritten() const {
 }
 
 void ExecutionContext::write(const char *s, int len) {
-  if (m_out) {
-    m_out->append(s, len);
+  if (m_sb) {
+    m_sb->append(s, len);
+    if (m_out && m_out->chunk_size > 0) {
+      if (m_sb->size() >= m_out->chunk_size) {
+        obFlush();
+      }
+    }
   } else {
     writeStdout(s, len);
   }
@@ -245,12 +253,13 @@ void ExecutionContext::obProtect(bool on) {
   m_protectedLevel = on ? m_buffers.size() : 0;
 }
 
-void ExecutionContext::obStart(const Variant& handler /* = null */) {
+void ExecutionContext::obStart(const Variant& handler /* = null */,
+                               int chunk_size /* = 0 */) {
   if (m_insideOBHandler) {
     raise_error("ob_start(): Cannot use output buffering "
                 "in output buffering display handlers");
   }
-  m_buffers.emplace_back(Variant(handler));
+  m_buffers.emplace_back(Variant(handler), chunk_size);
   resetCurrentBuffer();
 }
 
@@ -331,7 +340,6 @@ bool ExecutionContext::obFlush() {
   }
 
   auto str = last.oss.detach();
-
   if (!last.handler.isNull()) {
     try {
       Variant tout;
@@ -444,9 +452,11 @@ void ExecutionContext::flush() {
 
 void ExecutionContext::resetCurrentBuffer() {
   if (m_buffers.empty()) {
+    m_sb = nullptr;
     m_out = nullptr;
   } else {
-    m_out = &m_buffers.back().oss;
+    m_sb = &m_buffers.back().oss;
+    m_out = &m_buffers.back();
   }
 }
 
@@ -547,6 +557,8 @@ void ExecutionContext::onRequestShutdown() {
 void ExecutionContext::executeFunctions(ShutdownType type) {
   ThreadInfo::s_threadInfo->m_reqInjectionData.resetTimer(
     RuntimeOption::PspTimeoutSeconds);
+  ThreadInfo::s_threadInfo->m_reqInjectionData.resetCPUTimer(
+    RuntimeOption::PspCpuTimeoutSeconds);
 
   if (!m_shutdowns.isNull() && m_shutdowns.exists(type)) {
     SCOPE_EXIT {
@@ -693,11 +705,15 @@ void ExecutionContext::handleError(const std::string& msg,
   auto const ee = skipFrame ?
     ExtendedException(ExtendedException::SkipFrame{}, msg) :
     ExtendedException(msg);
-  recordLastError(ee, errnum);
   bool handled = false;
   if (callUserHandler) {
     handled = callUserErrorHandler(ee, errnum, false);
   }
+
+  if (!handled) {
+    recordLastError(ee, errnum);
+  }
+
   if (mode == ErrorThrowMode::Always ||
       (mode == ErrorThrowMode::IfUnhandled && !handled)) {
     DEBUGGER_ATTACHED_ONLY(phpDebuggerErrorHook(ee, errnum, msg));
@@ -777,6 +793,7 @@ bool ExecutionContext::callUserErrorHandler(const Exception &e, int errnum,
 
 bool ExecutionContext::onFatalError(const Exception &e) {
   MM().resetCouldOOM(isStandardRequest());
+  ThreadInfo::s_threadInfo.getNoCheck()->m_reqInjectionData.resetTimer();
 
   auto prefix = "\nFatal error: ";
   int errnum = static_cast<int>(ErrorConstants::ErrorModes::FATAL_ERROR);

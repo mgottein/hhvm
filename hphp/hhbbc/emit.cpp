@@ -22,10 +22,10 @@
 #include <memory>
 #include <type_traits>
 
-#include "folly/gen/Base.h"
-#include "folly/Conv.h"
-#include "folly/Optional.h"
-#include "folly/Memory.h"
+#include <folly/gen/Base.h>
+#include <folly/Conv.h>
+#include <folly/Optional.h>
+#include <folly/Memory.h>
 
 #include "hphp/runtime/base/repo-auth-type.h"
 #include "hphp/runtime/base/repo-auth-type-array.h"
@@ -910,12 +910,19 @@ void emit_class(EmitUnitState& state,
   }
 
   for (auto& cconst : cls.constants) {
-    pce->addConstant(
-      cconst.name,
-      cconst.typeConstraint,
-      &cconst.val,
-      cconst.phpCode
-    );
+    if (!cconst.val.hasValue()) {
+      pce->addAbstractConstant(
+        cconst.name,
+        cconst.typeConstraint
+      );
+    } else {
+      pce->addConstant(
+        cconst.name,
+        cconst.typeConstraint,
+        &cconst.val.value(),
+        cconst.phpCode
+      );
+    }
   }
 
   pce->setEnumBaseTy(cls.enumBaseTy);

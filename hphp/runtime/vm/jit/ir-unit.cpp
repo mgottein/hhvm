@@ -32,7 +32,7 @@ IRUnit::IRUnit(TransContext context)
 {}
 
 IRInstruction* IRUnit::defLabel(unsigned numDst, BCMarker marker,
-                                const jit::vector<unsigned>& producedRefs) {
+                                const jit::vector<uint32_t>& producedRefs) {
   IRInstruction inst(DefLabel, marker);
   IRInstruction* label = cloneInstruction(&inst);
   always_assert(producedRefs.size() == numDst);
@@ -47,9 +47,11 @@ IRInstruction* IRUnit::defLabel(unsigned numDst, BCMarker marker,
   return label;
 }
 
-Block* IRUnit::defBlock() {
+Block* IRUnit::defBlock(Block::Hint hint) {
   FTRACE(2, "IRUnit defining B{}\n", m_nextBlockId);
-  return new (m_arena) Block(m_nextBlockId++);
+  auto const block = new (m_arena) Block(m_nextBlockId++);
+  block->setHint(hint);
+  return block;
 }
 
 IRInstruction* IRUnit::mov(SSATmp* dst, SSATmp* src, BCMarker marker) {
@@ -116,7 +118,9 @@ void IRUnit::collectPostConditions() {
   Block* mainExit = nullptr;
   Block* lastMainBlock = nullptr;
 
-  FrameState state{*this, entry()->front().marker()};
+  FrameStateMgr state{*this, entry()->front().marker()};
+  // TODO(#5678127): this code is wrong for HHIRBytecodeControlFlow
+  state.setLegacyReoptimize();
   ITRACE(2, "collectPostConditions starting\n");
   Trace::Indent _i;
 
@@ -124,7 +128,6 @@ void IRUnit::collectPostConditions() {
     state.startBlock(block, block->front().marker());
 
     for (auto& inst : *block) {
-      state.setMarker(inst.marker());
       state.update(&inst);
     }
 

@@ -16,7 +16,7 @@
 
 #include <gtest/gtest.h>
 
-#include "folly/ScopeGuard.h"
+#include <folly/ScopeGuard.h>
 
 #include "hphp/runtime/base/array-data.h"
 #include "hphp/runtime/base/array-init.h"
@@ -291,6 +291,11 @@ TEST(Type, Specialized) {
   // Implemented conservatively right now, but the following better not return
   // bottom:
   EXPECT_EQ(constArrayMixed, constArrayMixed - spacked);
+
+  // Checking specialization dropping.
+  EXPECT_EQ(Type::Arr | Type::BoxedInitCell, packed | Type::BoxedInitCell);
+  auto specializedObj = Type::Obj.specialize(SystemLib::s_IteratorClass);
+  EXPECT_EQ(Type::Arr | Type::Obj, packed | specializedObj);
 }
 
 TEST(Type, SpecializedObjects) {

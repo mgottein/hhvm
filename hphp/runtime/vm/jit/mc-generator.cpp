@@ -34,10 +34,10 @@
 #include <unordered_set>
 #include <vector>
 
-#include "folly/Format.h"
-#include "folly/MapUtil.h"
-#include "folly/Optional.h"
-#include "folly/String.h"
+#include <folly/Format.h>
+#include <folly/MapUtil.h>
+#include <folly/Optional.h>
+#include <folly/String.h>
 
 #include "hphp/util/abi-cxx.h"
 #include "hphp/util/bitops.h"
@@ -73,9 +73,8 @@
 #include "hphp/runtime/vm/jit/check.h"
 #include "hphp/runtime/vm/jit/code-gen.h"
 #include "hphp/runtime/vm/jit/debug-guards.h"
-#include "hphp/runtime/vm/jit/hhbc-translator.h"
+#include "hphp/runtime/vm/jit/irgen.h"
 #include "hphp/runtime/vm/jit/inlining-decider.h"
-#include "hphp/runtime/vm/jit/ir-translator.h"
 #include "hphp/runtime/vm/jit/normalized-instruction.h"
 #include "hphp/runtime/vm/jit/opt.h"
 #include "hphp/runtime/vm/jit/print.h"
@@ -93,6 +92,7 @@
 #include "hphp/runtime/vm/treadmill.h"
 #include "hphp/runtime/vm/type-profile.h"
 #include "hphp/runtime/vm/unwind.h"
+#include "hphp/runtime/vm/jit/translate-region.h"
 
 #include "hphp/runtime/vm/jit/mc-generator-internal.h"
 
@@ -153,10 +153,39 @@ CppCall MCGenerator::getDtorCall(DataType type) {
   not_reached();
 }
 
+///////////////////////////////////////////////////////////////////////////////
+
+bool shouldPGOFunc(const Func& func) {
+  if (!RuntimeOption::EvalJitPGO) return false;
+
+  // JITing pseudo-mains requires extra checks that blow the IR.  PGO
+  // can significantly increase the size of the regions, so disable it for
+  // pseudo-mains (so regions will be just tracelets).
+  if (func.isPseudoMain()) return false;
+
+  // Non-cloned closures simply contain prologues that redispacth to
+  // cloned closures.  They don't contain a translation for the
+  // function entry, which is what triggers an Optimize retranslation.
+  // So don't generate profiling translations for them -- there's not
+  // much to do with PGO anyway here, since they just have prologues.
+  if (func.isClosureBody() && !func.isClonedClosure()) return false;
+
+  if (!RuntimeOption::EvalJitPGOHotOnly) return true;
+  return func.attrs() & AttrHot;
+}
+
 bool MCGenerator::profileSrcKey(SrcKey sk) const {
-  if (!sk.func()->shouldPGO()) return false;
+  if (!shouldPGOFunc(*sk.func())) return false;
   if (m_tx.profData()->optimized(sk.getFuncId())) return false;
   if (m_tx.profData()->profiling(sk.getFuncId())) return true;
+
+  // Don't start profiling new functions if the size of either main or
+  // prof is already above Eval.JitAMaxUsage.
+  auto tcUsage = std::max(code.mainUsed(), code.profUsed());
+  if (tcUsage >= RuntimeOption::EvalJitAMaxUsage) {
+    return false;
+  }
+
   return requestCount() <= RuntimeOption::EvalJitProfileRequests;
 }
 
@@ -266,6 +295,11 @@ TCA MCGenerator::retranslateOpt(TransID transId, bool align) {
   return start;
 }
 
+static bool liveFrameIsPseudoMain() {
+  ActRec* ar = (ActRec*)vmfp();
+  return ar->hasVarEnv() && ar->getVarEnv()->isGlobalScope();
+}
+
 /*
  * Find or create a translation for sk. Returns TCA of "best" current
  * translation. May return NULL if it is currently impossible to create
@@ -282,8 +316,7 @@ MCGenerator::getTranslation(const TranslArgs& args) {
           sk.offset());
   SKTRACE(2, sk, "   funcId: %x \n", sk.func()->getFuncId());
 
-  if (Translator::liveFrameIsPseudoMain() &&
-      !RuntimeOption::EvalJitPseudomain) {
+  if (liveFrameIsPseudoMain() && !RuntimeOption::EvalJitPseudomain) {
     SKTRACE(2, sk, "punting on pseudoMain\n");
     return nullptr;
   }
@@ -467,15 +500,10 @@ MCGenerator::translate(const TranslArgs& args) {
   Func* func = const_cast<Func*>(args.m_sk.func());
   CodeCache::Selector cbSel(CodeCache::Selector::Args(code)
                             .profile(m_tx.mode() == TransKind::Profile)
-                            .hot((func->attrs() & AttrHot) && m_tx.useAHot()));
+                            .hot(RuntimeOption::EvalHotFuncCount &&
+                                 (func->attrs() & AttrHot) && m_tx.useAHot()));
 
-  if (args.m_align) {
-    mcg->backEnd().moveToAlign(code.main(),
-                               MoveToAlignFlags::kNonFallthroughAlign);
-  }
-
-  TCA start = code.main().frontier();
-  translateWork(args);
+  auto start = translateWork(args);
 
   if (args.m_setFuncBody) {
     func->setFuncBody(start);
@@ -618,7 +646,7 @@ MCGenerator::getFuncPrologue(Func* func, int nPassed, ActRec* ar,
   // in case another thread snuck in and set the prologue already.
   if (checkCachedPrologue(func, paramIndex, prologue)) return prologue;
 
-  // We're comming from a BIND_CALL service request, so enable
+  // We're coming from a BIND_CALL service request, so enable
   // profiling if we haven't optimized the function entry yet.
   assert(m_tx.mode() == TransKind::Invalid ||
          m_tx.mode() == TransKind::Prologue);
@@ -631,14 +659,18 @@ MCGenerator::getFuncPrologue(Func* func, int nPassed, ActRec* ar,
 
   CodeCache::Selector cbSel(CodeCache::Selector::Args(code)
                             .profile(m_tx.mode() == TransKind::Proflogue)
-                            .hot((func->attrs() & AttrHot) && m_tx.useAHot()));
+                            .hot(RuntimeOption::EvalHotFuncCount &&
+                                 (func->attrs() & AttrHot) && m_tx.useAHot()));
 
+  assert(m_fixups.empty());
   // If we're close to a cache line boundary, just burn some space to
   // try to keep the func and its body on fewer total lines.
   if (((uintptr_t)code.main().frontier() & backEnd().cacheLineMask()) >=
       (backEnd().cacheLineSize() / 2)) {
     backEnd().moveToAlign(code.main(), MoveToAlignFlags::kCacheLineAlign);
   }
+  m_fixups.m_alignFixups.emplace(
+    code.main().frontier(), std::make_pair(backEnd().cacheLineSize() / 2, 0));
 
   // Careful: this isn't necessarily the real entry point. For funcIsMagic
   // prologues, this is just a possible prologue.
@@ -647,14 +679,9 @@ MCGenerator::getFuncPrologue(Func* func, int nPassed, ActRec* ar,
   TCA realColdStart   = mcg->code.realCold().frontier();
   TCA realFrozenStart = mcg->code.realFrozen().frontier();
 
-  auto const skFuncBody = [&] {
-    assert(m_fixups.empty());
-    auto ret = backEnd().emitFuncPrologue(code.main(), code.cold(), func,
-                                          funcIsMagic, nPassed,
-                                          start, aStart);
-    m_fixups.process(nullptr);
-    return ret;
-  }();
+  auto const skFuncBody = backEnd().emitFuncPrologue(
+    code.main(), code.cold(), func, funcIsMagic, nPassed, start, aStart);
+  m_fixups.process(nullptr);
 
   assert(backEnd().funcPrologueHasGuard(start, func));
   TRACE(2, "funcPrologue mcg %p %s(%d) setting prologue %p\n",
@@ -922,11 +949,13 @@ MCGenerator::bindJmpccFirst(TCA toSmash,
   }
 
   TCA stub = emitEphemeralServiceReq(code.frozen(),
-                                     getFreeStub(code.frozen(), nullptr),
+                                     getFreeStub(code.frozen(),
+                                                 &mcg->cgFixups()),
                                      REQ_BIND_JMPCC_SECOND,
                                      RipRelative(toSmash),
                                      offWillDefer, cc);
 
+  mcg->cgFixups().process(nullptr);
   smashed = true;
   assert(Translator::WriteLease().amOwner());
   /*
@@ -1381,13 +1410,13 @@ TCA MCGenerator::getFreeStub(CodeBlock& frozen, CodeGenFixups* fixups) {
     always_assert(m_freeStubs.m_list == nullptr ||
                   code.isValidCodeAddress(TCA(m_freeStubs.m_list)));
     TRACE(1, "recycle stub %p\n", ret);
-    if (fixups) {
-      fixups->m_reusedStubs.emplace_back(ret);
-    }
   } else {
     ret = frozen.frontier();
     Stats::inc(Stats::Astub_New);
     TRACE(1, "alloc new stub %p\n", ret);
+  }
+  if (fixups) {
+    fixups->m_reusedStubs.emplace_back(ret);
   }
   return ret;
 }
@@ -1530,7 +1559,8 @@ template <typename T> void ClearContainer(T& container) {
 }
 
 void
-CodeGenFixups::process(GrowableVector<IncomingBranch>* inProgressTailBranches) {
+CodeGenFixups::process_only(
+  GrowableVector<IncomingBranch>* inProgressTailBranches) {
   for (uint i = 0; i < m_pendingFixups.size(); i++) {
     TCA tca = m_pendingFixups[i].m_tca;
     assert(mcg->isValidCodeAddress(tca));
@@ -1555,21 +1585,6 @@ CodeGenFixups::process(GrowableVector<IncomingBranch>* inProgressTailBranches) {
     m_inProgressTailJumps.swap(*inProgressTailBranches);
   }
   assert(m_inProgressTailJumps.empty());
-
-  /*
-   * Currently these are only used by the relocator,
-   * so there's nothing left to do here.
-   *
-   * Once we try to relocate live code, we'll need to
-   * store compact forms of these for later.
-   */
-  ClearContainer(m_reusedStubs);
-  ClearContainer(m_addressImmediates);
-  ClearContainer(m_codePointers);
-  ClearContainer(m_bcMap);
-  ClearContainer(m_alignFixups);
-
-  assert(empty());
 }
 
 void CodeGenFixups::clear() {
@@ -1599,13 +1614,18 @@ bool CodeGenFixups::empty() const {
     m_literals.empty();
 }
 
-void
+TCA
 MCGenerator::translateWork(const TranslArgs& args) {
   Timer _t(Timer::translate);
   auto sk = args.m_sk;
 
   SKTRACE(1, sk, "translateWork\n");
   assert(m_tx.getSrcDB().find(sk));
+
+  if (args.m_align) {
+    mcg->backEnd().moveToAlign(code.main(),
+                               MoveToAlignFlags::kNonFallthroughAlign);
+  }
 
   TCA        start             = code.main().frontier();
   TCA        coldStart         = code.cold().frontier();
@@ -1652,7 +1672,7 @@ MCGenerator::translateWork(const TranslArgs& args) {
         assert(!region->empty());
       } else {
         TransID transId = args.m_transId;
-        assert(transId != kInvalidTransID);
+        assert(isValidTransID(transId));
         region = selectHotRegion(transId, this);
         assert(region);
         if (region && region->empty()) region = nullptr;
@@ -1667,57 +1687,56 @@ MCGenerator::translateWork(const TranslArgs& args) {
       region = selectRegion(rContext, m_tx.mode());
     }
 
-    Translator::TranslateResult result = Translator::Retry;
-    Translator::RegionBlacklist regionInterps;
+    auto result = TranslateResult::Retry;
+    auto regionInterps = RegionBlacklist{};
     Offset const initSpOffset = region ? region->entry()->initialSpOffset()
                                        : liveSpOff();
 
-    auto const transContext = TransContext {
-      RuntimeOption::EvalJitPGO
-        ? m_tx.profData()->curTransID()
-        : kInvalidTransID,
-      sk.offset(),
-      initSpOffset,
-      sk.resumed(),
-      sk.func()
-    };
+    while (region && result == TranslateResult::Retry) {
+      auto const transContext = TransContext {
+        RuntimeOption::EvalJitPGO
+          ? m_tx.profData()->curTransID()
+          : kInvalidTransID,
+        sk.offset(),
+        initSpOffset,
+        sk.resumed(),
+        sk.func(),
+        region.get()
+      };
 
-    while (result == Translator::Retry) {
-      m_tx.traceStart(transContext);
-
-      if (!region) {
-        m_tx.setMode(TransKind::Interp);
-        m_tx.traceFree();
-        break;
-      }
+      HTS hhbcTrans { transContext };
+      FTRACE(1, "{}{:-^40}{}\n",
+             color(ANSI_COLOR_BLACK, ANSI_BGCOLOR_GREEN),
+             " HHIR during translation ",
+             color(ANSI_COLOR_END));
 
       try {
         assertCleanState();
-        result = m_tx.translateRegion(*region, regionInterps, args.m_flags);
+        result = translateRegion(hhbcTrans, *region, regionInterps,
+          args.m_flags);
 
         // If we're profiling, grab the postconditions so we can
         // use them in region selection whenever we decide to retranslate.
         if (m_tx.mode() == TransKind::Profile &&
-            result == Translator::Success &&
+            result == TranslateResult::Success &&
             RuntimeOption::EvalJitPGOUsePostConditions) {
-          pconds = m_tx.irTrans()->hhbcTrans().unit().postConditions();
+          pconds = hhbcTrans.unit.postConditions();
         }
 
-        FTRACE(2, "translateRegion finished with result {}\n",
-               Translator::ResultName(result));
+        FTRACE(2, "translateRegion finished with result {}\n", show(result));
       } catch (const std::exception& e) {
         FTRACE(1, "translateRegion failed with '{}'\n", e.what());
-        result = Translator::Failure;
+        result = TranslateResult::Failure;
       }
 
-      if (result != Translator::Success) {
+      if (result != TranslateResult::Success) {
         // Translation failed or will be retried. Free resources for this
         // trace, rollback the translation cache frontiers, and discard any
         // pending fixups.
         resetState();
       }
 
-      if (result == Translator::Failure) {
+      if (result == TranslateResult::Failure) {
         // If the region translator failed for an Optimize translation, it's OK
         // to do a Live translation for the function entry. Otherwise, fall
         // back to Interp.
@@ -1738,11 +1757,11 @@ MCGenerator::translateWork(const TranslArgs& args) {
           }
         }
       }
-
-      m_tx.traceFree();
     }
 
-    if (result == Translator::Success) {
+    if (!region) m_tx.setMode(TransKind::Interp);
+
+    if (result == TranslateResult::Success) {
       assert(m_tx.mode() == TransKind::Live    ||
              m_tx.mode() == TransKind::Profile ||
              m_tx.mode() == TransKind::Optimize);
@@ -1752,7 +1771,7 @@ MCGenerator::translateWork(const TranslArgs& args) {
 
   if (args.m_dryRun) {
     resetState();
-    return;
+    return start;
   }
 
   if (transKindToRecord == TransKind::Interp) {
@@ -1760,6 +1779,11 @@ MCGenerator::translateWork(const TranslArgs& args) {
     FTRACE(1, "emitting dispatchBB interp request for failed translation\n");
     backEnd().emitInterpReq(code.main(), code.cold(), sk);
     // Fall through.
+  }
+
+  if (args.m_align) {
+    m_fixups.m_alignFixups.emplace(
+      start, std::make_pair(backEnd().cacheLineSize() - 1, 0));
   }
 
   if (RuntimeOption::EvalProfileBC) {
@@ -1816,14 +1840,15 @@ MCGenerator::translateWork(const TranslArgs& args) {
   if (Trace::moduleEnabledRelease(Trace::tcspace, 1)) {
     Trace::traceRelease("%s", getUsageString().c_str());
   }
+
+  return start;
 }
 
-void MCGenerator::traceCodeGen() {
-  HhbcTranslator& ht = m_tx.irTrans()->hhbcTrans();
-  auto& unit = ht.unit();
+void MCGenerator::traceCodeGen(HTS& hts) {
+  auto& unit = hts.unit;
 
   auto finishPass = [&](const char* msg, int level) {
-    printUnit(level, unit, msg, nullptr, ht.irBuilder().guards());
+    printUnit(level, unit, msg, nullptr, hts.irb->guards());
     assert(checkCfg(unit));
   };
 
@@ -1834,7 +1859,7 @@ void MCGenerator::traceCodeGen() {
     "IRUnit has loop but Eval.JitLoops=0:\n{}\n", unit
   );
 
-  optimize(unit, ht.irBuilder(), m_tx.mode());
+  optimize(unit, *hts.irb, m_tx.mode());
   finishPass(" after optimizing ", kOptLevel);
 
   if (m_tx.mode() == TransKind::Profile &&

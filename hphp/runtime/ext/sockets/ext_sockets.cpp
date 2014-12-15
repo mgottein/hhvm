@@ -31,10 +31,12 @@
 #include <sys/uio.h>
 #include <poll.h>
 
-#include "folly/String.h"
-#include "folly/SocketAddress.h"
+#include <folly/String.h>
+#include <folly/SocketAddress.h>
 
 #include "hphp/util/network.h"
+#include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/socket.h"
 #include "hphp/runtime/base/ssl-socket.h"
 #include "hphp/runtime/server/server-stats.h"
@@ -235,8 +237,15 @@ static void sock_array_to_fd_set(const Array& sockets, pollfd *fds, int &nfds,
   assert(fds);
   for (ArrayIter iter(sockets); iter; ++iter) {
     File *sock = iter.second().toResource().getTyped<File>();
+    int intfd = sock->fd();
+    if (intfd < 0) {
+      raise_warning(
+        "cannot represent a stream of type user-space as a file descriptor"
+      );
+      continue;
+    }
     pollfd &fd = fds[nfds++];
-    fd.fd = sock->fd();
+    fd.fd = intfd;
     fd.events = flag;
     fd.revents = 0;
   }
@@ -849,6 +858,11 @@ Variant HHVM_FUNCTION(socket_select,
   if (!except.isNull()) {
     sock_array_to_fd_set(except.toArray(), fds, count, POLLPRI);
   }
+  if (!count) {
+    raise_warning("no resource arrays were passed to select");
+    free(fds);
+    return false;
+  }
 
   IOStatusHelper io("socket_select");
   int timeout_ms = -1;
@@ -1310,6 +1324,10 @@ void HHVM_FUNCTION(socket_clear_error,
 ///////////////////////////////////////////////////////////////////////////////
 // fsock: treating sockets as "file"
 
+namespace {
+PersistentResourceStore<std::string,Socket*> s_sockets;
+}
+
 Variant sockopen_impl(const HostURL &hosturl, VRefParam errnum,
                       VRefParam errstr, double timeout, bool persistent) {
   errnum = 0;
@@ -1318,8 +1336,7 @@ Variant sockopen_impl(const HostURL &hosturl, VRefParam errnum,
   if (persistent) {
     key = hosturl.getHostURL() + ":" +
           folly::to<std::string>(hosturl.getPort());
-    Socket *sock =
-      dynamic_cast<Socket*>(g_persistentResources->get("socket", key.c_str()));
+    Socket *sock = s_sockets.get(key);
     if (sock) {
       if (sock->getError() == 0 && sock->checkLiveness()) {
         return Resource(sock);
@@ -1328,7 +1345,7 @@ Variant sockopen_impl(const HostURL &hosturl, VRefParam errnum,
       // socket had an error earlier, we need to close it, remove it from
       // persistent storage, and create a new one (in that order)
       sock->close();
-      g_persistentResources->remove("socket", key.c_str());
+      s_sockets.remove(key);
     }
   }
 
@@ -1346,7 +1363,7 @@ Variant sockopen_impl(const HostURL &hosturl, VRefParam errnum,
 
   if (persistent) {
     assert(!key.empty());
-    g_persistentResources->set("socket", key.c_str(), ret.getTyped<Socket>());
+    s_sockets.set(key, ret.getTyped<Socket>());
   }
 
   return ret;

@@ -79,7 +79,7 @@ include_directories(${LIBMEMCACHED_INCLUDE_DIR})
 link_directories(${LIBMEMCACHED_LIBRARY_DIRS})
 
 # pcre checks
-find_package(PCRE REQUIRED)
+find_package(PCRE)
 include_directories(${PCRE_INCLUDE_DIR})
 
 # libevent checks
@@ -495,7 +495,7 @@ macro(hphp_link target)
   target_link_libraries(${target} ${LDAP_LIBRARIES})
   target_link_libraries(${target} ${LBER_LIBRARIES})
 
-  target_link_libraries(${target} ${LIBMEMCACHED_LIBRARIES})
+  target_link_libraries(${target} ${LIBMEMCACHED_LIBRARY})
 
   target_link_libraries(${target} ${CRYPT_LIB})
 

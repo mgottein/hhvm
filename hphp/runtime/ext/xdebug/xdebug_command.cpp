@@ -21,7 +21,9 @@
 #include "hphp/runtime/ext/xdebug/php5_xdebug/xdebug_var.h"
 
 #include "hphp/compiler/builtin_symbols.h"
+#include "hphp/runtime/base/file.h"
 #include "hphp/runtime/base/static-string-table.h"
+#include "hphp/runtime/base/string-util.h"
 #include "hphp/runtime/base/php-globals.h"
 #include "hphp/runtime/ext/std/ext_std_file.h"
 #include "hphp/runtime/ext/std/ext_std_misc.h"
@@ -237,7 +239,7 @@ static Variant find_symbol(const String& name, int depth) {
   // If the result is unitialized, the property must be undefined
   Variant result = do_eval(eval_unit, depth);
   if (!result.isInitialized()) {
-    throw XDebugServer::ERROR_PROPERTY_NON_EXISTANT;
+    throw XDebugServer::ERROR_PROPERTY_NON_EXISTENT;
   }
   return result;
 }
@@ -1274,7 +1276,7 @@ public:
       // we ensure it's defined before grabbing it
       case XDebugContext::USER_CONSTANTS: {
         if (!f_defined(m_name)) {
-          throw XDebugServer::ERROR_PROPERTY_NON_EXISTANT;
+          throw XDebugServer::ERROR_PROPERTY_NON_EXISTENT;
         }
 
         // php5 xdebug adds "constant" facet, but this is not in the spec
@@ -1433,7 +1435,7 @@ public:
     }
 
     // Compute the source string. The initial size is arbitrary, we just guess
-    // 80 chracters per line
+    // 80 characters per line
     StringBuffer buf((m_endLine - m_beginLine) * 80);
     ArrayIter iter(source); iter.setPos(m_beginLine);
     for (int i = m_beginLine; i <= m_endLine && iter; i++, ++iter) {

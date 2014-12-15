@@ -17,33 +17,35 @@
 
 #include "hphp/runtime/ext/std/ext_std_file.h"
 
-#include "hphp/runtime/ext/stream/ext_stream.h"
-#include "hphp/runtime/ext/string/ext_string.h"
+#include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/array-util.h"
+#include "hphp/runtime/base/comparisons.h"
+#include "hphp/runtime/base/directory.h"
+#include "hphp/runtime/base/file-stream-wrapper.h"
+#include "hphp/runtime/base/file-util.h"
+#include "hphp/runtime/base/http-client.h"
+#include "hphp/runtime/base/ini-setting.h"
+#include "hphp/runtime/base/pipe.h"
+#include "hphp/runtime/base/request-local.h"
+#include "hphp/runtime/base/runtime-error.h"
+#include "hphp/runtime/base/runtime-option.h"
+#include "hphp/runtime/base/stat-cache.h"
+#include "hphp/runtime/base/stream-wrapper-registry.h"
+#include "hphp/runtime/base/string-util.h"
+#include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/base/thread-init-fini.h"
+#include "hphp/runtime/base/user-stream-wrapper.h"
+#include "hphp/runtime/base/zend-scanf.h"
 #include "hphp/runtime/ext/ext_hash.h"
 #include "hphp/runtime/ext/std/ext_std_options.h"
-#include "hphp/runtime/base/runtime-option.h"
-#include "hphp/runtime/base/runtime-error.h"
-#include "hphp/runtime/base/ini-setting.h"
-#include "hphp/runtime/base/array-util.h"
-#include "hphp/runtime/base/http-client.h"
-#include "hphp/runtime/base/request-local.h"
-#include "hphp/runtime/base/thread-init-fini.h"
+#include "hphp/runtime/ext/stream/ext_stream.h"
+#include "hphp/runtime/ext/string/ext_string.h"
 #include "hphp/runtime/server/static-content-cache.h"
-#include "hphp/runtime/base/zend-scanf.h"
-#include "hphp/runtime/base/pipe.h"
-#include "hphp/runtime/base/stream-wrapper-registry.h"
-#include "hphp/runtime/base/file-stream-wrapper.h"
-#include "hphp/runtime/base/directory.h"
-#include "hphp/runtime/base/thread-info.h"
-#include "hphp/runtime/base/stat-cache.h"
-#include "hphp/runtime/base/string-util.h"
-#include "hphp/runtime/base/user-stream-wrapper.h"
 #include "hphp/system/constants.h"
 #include "hphp/system/systemlib.h"
 #include "hphp/util/logger.h"
 #include "hphp/util/process.h"
-#include "hphp/runtime/base/file-util.h"
-#include "folly/String.h"
+#include <folly/String.h>
 #include <dirent.h>
 #include <glob.h>
 #include <sys/types.h>
@@ -456,10 +458,16 @@ Variant HHVM_FUNCTION(fputs,
 }
 
 Variant HHVM_FUNCTION(fprintf,
-                      const Resource& handle,
+                      const Variant& handle,
                       const String& format,
                       const Array& args /* = null_array */) {
-  CHECK_HANDLE(handle, f);
+  if (!handle.isResource()) {
+    raise_param_type_warning("fprintf", 1, DataType::KindOfResource,
+                             handle.getType());
+    return false;
+  }
+  const Resource res = handle.toResource();
+  CHECK_HANDLE(res, f);
   return f->printf(format, args);
 }
 

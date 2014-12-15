@@ -8,7 +8,6 @@
  *
  *)
 
-
 (** Module "naming" a program.
  *
  * The naming phase consists in several things
@@ -31,8 +30,6 @@ type class_set = Utils.SSet.t
 type typedef_set = Utils.SSet.t
 type const_set = Utils.SSet.t
 type decl_set = fun_set * class_set * typedef_set * const_set
-
-type class_cache = Nast.class_ option Utils.SMap.t ref
 
 (* We want to keep the positions of names that have been
  * replaced by identifiers.
@@ -181,7 +178,6 @@ let predef_fun x =
   predef_funs := SMap.add x var !predef_funs;
   x
 
-let anon      = predef_fun "?anon"
 let is_int    = predef_fun SN.StdlibFunctions.is_int
 let is_bool   = predef_fun SN.StdlibFunctions.is_bool
 let is_array  = predef_fun SN.StdlibFunctions.is_array
@@ -494,8 +490,6 @@ module Env = struct
     end else
       get_name genv genv_sect fq_x
 
-  let const (genv, env) x  = get_name genv env.consts x
-
   let global_const (genv, env) x  =
     elaborate_and_get_name_with_fallback
       (* Same idea as Dep.FunName, see below. *)
@@ -642,7 +636,7 @@ let remove_decls env (funs, classes, typedefs, consts) =
 let is_alok_type_name (_, x) = String.length x <= 2 && x.[0] = 'T'
 
 let check_constraint (_, (pos, name), _) =
-  (* TODO refactor this in a seperate module for errors *)
+  (* TODO refactor this in a separate module for errors *)
   if String.lowercase name = "this"
   then Errors.this_reserved pos
   else if name.[0] <> 'T' then Errors.start_with_T pos
@@ -707,6 +701,37 @@ and hint_ ~allow_this is_static_var p env x =
   | Hoption h -> N.Hoption (hint env h)
   | Hfun (hl, opt, h) -> N.Hfun (List.map (hint env) hl, opt, hint env h)
   | Happly ((_, x) as id, hl) -> hint_id ~allow_this env is_static_var id hl
+  | Haccess (root_id, id, ids) ->
+    let genv, _ = env in
+    let class_id = make_class_id ~allow_typedef:true env root_id in
+    let class_id = match class_id with
+      | N.CI cid ->
+          (* Checks that the cid is a valid hint id *)
+          let cid =
+            match hint_id ~allow_this env is_static_var root_id [] with
+            | N.Happly (class_id, _) -> class_id
+            | _ ->
+                Errors.invalid_type_access_root root_id;
+                fst root_id, SN.Classes.cUnknown
+          in
+          N.CI cid
+      (* At this point we can resolve the "self" class id to the current class
+       * we are naming.
+       *)
+      | N.CIself ->
+          begin match genv.cclass with
+          | Some class_ ->
+              N.CI (p, snd class_.c_name)
+          | None ->
+              Errors.static_outside_class p;
+              N.CI (fst root_id, SN.Classes.cUnknown)
+          end
+      (* "static" is resolved later at two places, Paritially during
+       * Typing_instantiate, the remainder during Typing_taccess.
+       *)
+      | N.CIparent | N.CIstatic | N.CIvar _ -> class_id
+    in
+    N.Haccess (class_id, id, ids)
   | Hshape fdl -> N.Hshape
     begin
       List.fold_left begin fun fdm (pname, h) ->
@@ -791,8 +816,8 @@ and hint_id ~allow_this env is_static_var (p, x as id) hl =
         N.Habstr (x, opt_map (hint env) gen_constraint)
     | _ ->
         (* In the future, when we have proper covariant support, we can
-         * allow SN.Typehints.this to instantiate any covariant type variable. For
-         * example, let us pretend that we have this defined:
+         * allow SN.Typehints.this to instantiate any covariant type variable.
+         * For example, let us pretend that we have this defined:
          *
          *   interface IFoo<read Tread, write Twrite>
          *
@@ -862,6 +887,28 @@ and get_constraint env tparam =
   env, gen_constraint
 
 and hintl ~allow_this env l = List.map (hint ~allow_this env) l
+
+and make_class_id ?(allow_typedef=false) env (p, x as cid) =
+  if not allow_typedef then no_typedef env cid;
+  match x with
+    | x when x = SN.Classes.cParent ->
+      if (fst env).cclass = None then
+        let () = Errors.parent_outside_class p in
+        N.CI (p, SN.Classes.cUnknown)
+      else N.CIparent
+    | x when x = SN.Classes.cSelf ->
+      if (fst env).cclass = None then
+        let () = Errors.self_outside_class p in
+        N.CI (p, SN.Classes.cUnknown)
+      else N.CIself
+    | x when x = SN.Classes.cStatic -> if (fst env).cclass = None then
+        let () = Errors.static_outside_class p in
+        N.CI (p, SN.Classes.cUnknown)
+      else N.CIstatic
+    | x when x = "$this" -> N.CIvar (p, N.This)
+    | x when x.[0] = '$' -> N.CIvar (p, N.Lvar (Env.new_lvar env cid))
+    | _ -> N.CI (Env.class_name env cid)
+
 
 (*****************************************************************************)
 (* All the methods and static methods of an interface are "implicitely"
@@ -946,10 +993,12 @@ and class_ genv c =
   let fmethod  = class_method env sm_names v_names in
   let methods  = List.fold_right fmethod c.c_body [] in
   let uses     = List.fold_right (class_use env) c.c_body [] in
+  let xhp_attr_uses = List.fold_right (xhp_attr_use env) c.c_body [] in
   let req_implements, req_extends = List.fold_right
     (class_require env c.c_kind) c.c_body ([], []) in
   let tparam_l  = type_paraml env c.c_tparams in
   let consts   = List.fold_right (class_const env) c.c_body [] in
+  let typeconsts = List.fold_right (class_typeconst env) c.c_body [] in
   let implements = List.map (hint ~allow_this:true env) c.c_implements in
   let constructor = List.fold_left (constructor env) None c.c_body in
   let constructor, methods, smethods =
@@ -968,10 +1017,12 @@ and class_ genv c =
     N.c_tparams        = tparam_l;
     N.c_extends        = parents;
     N.c_uses           = uses;
+    N.c_xhp_attr_uses  = xhp_attr_uses;
     N.c_req_extends    = req_extends;
     N.c_req_implements = req_implements;
     N.c_implements     = implements;
     N.c_consts         = consts;
+    N.c_typeconsts     = typeconsts;
     N.c_static_vars    = svars;
     N.c_vars           = vars;
     N.c_constructor    = constructor;
@@ -1009,15 +1060,33 @@ and class_use env x acc =
   | ClassUse h ->
     hint_no_typedef env h;
     hint ~allow_this:true env h :: acc
+  | XhpAttrUse _ -> acc
   | ClassTraitRequire _ -> acc
   | ClassVars _ -> acc
+  | XhpAttr _ -> acc
   | Method _ -> acc
+  | TypeConst _ -> acc
+
+and xhp_attr_use env x acc =
+  match x with
+  | Attributes _ -> acc
+  | Const _ -> acc
+  | ClassUse _ -> acc
+  | XhpAttrUse h ->
+    hint_no_typedef env h;
+    hint ~allow_this:true env h :: acc
+  | ClassTraitRequire _ -> acc
+  | ClassVars _ -> acc
+  | XhpAttr _ -> acc
+  | Method _ -> acc
+  | TypeConst _ -> acc
 
 and class_require env c_kind x acc =
   match x with
   | Attributes _ -> acc
   | Const _ -> acc
   | ClassUse _ -> acc
+  | XhpAttrUse _ -> acc
   | ClassTraitRequire (MustExtend, h)
       when c_kind <> Ast.Ctrait && c_kind <> Ast.Cinterface ->
     let () = Errors.invalid_req_extends (fst h) in
@@ -1034,14 +1103,18 @@ and class_require env c_kind x acc =
     let acc_impls, acc_exts = acc in
     (hint ~allow_this:true env h :: acc_impls, acc_exts)
   | ClassVars _ -> acc
+  | XhpAttr _ -> acc
   | Method _ -> acc
+  | TypeConst _ -> acc
 
 and constructor env acc = function
   | Attributes _ -> acc
   | Const _ -> acc
   | ClassUse _ -> acc
+  | XhpAttrUse _ -> acc
   | ClassTraitRequire _ -> acc
   | ClassVars _ -> acc
+  | XhpAttr _ -> acc
   | Method ({ m_name = (p, name); _ } as m) when name = SN.Members.__construct ->
       let genv, lenv = env in
       let env = ({ genv with in_member_fun = true}, lenv) in
@@ -1049,20 +1122,25 @@ and constructor env acc = function
       | None -> Some (method_ env m)
       | Some _ -> Errors.method_name_already_bound p name; acc)
   | Method _ -> acc
+  | TypeConst _ -> acc
 
 and class_const env x acc =
   match x with
   | Attributes _ -> acc
   | Const (h, l) -> const_defl h env l @ acc
   | ClassUse _ -> acc
+  | XhpAttrUse _ -> acc
   | ClassTraitRequire _ -> acc
   | ClassVars _ -> acc
+  | XhpAttr _ -> acc
   | Method _ -> acc
+  | TypeConst _ -> acc
 
 and class_var_static env x acc =
   match x with
   | Attributes _ -> acc
   | ClassUse _ -> acc
+  | XhpAttrUse _ -> acc
   | ClassTraitRequire _ -> acc
   | Const _ -> acc
   | ClassVars (kl, h, cvl) when List.mem Static kl ->
@@ -1071,12 +1149,15 @@ and class_var_static env x acc =
     let cvl = List.map (fill_cvar kl h) cvl in
     cvl @ acc
   | ClassVars _ -> acc
+  | XhpAttr _ -> acc
   | Method _ -> acc
+  | TypeConst _ -> acc
 
 and class_var env x acc =
   match x with
   | Attributes _ -> acc
   | ClassUse _ -> acc
+  | XhpAttrUse _ -> acc
   | ClassTraitRequire _ -> acc
   | Const _ -> acc
   | ClassVars (kl, h, cvl) when not (List.mem Static kl) ->
@@ -1087,32 +1168,100 @@ and class_var env x acc =
     let cvl = List.map (fill_cvar kl h) cvl in
     cvl @ acc
   | ClassVars _ -> acc
+  | XhpAttr (kl, h, cvl, is_required, maybe_enum) ->
+    let default = (match cvl with
+      | [(_, v)] -> v
+      | _ -> None) in
+    let h = (match maybe_enum with
+      | Some (pos, items) ->
+        let contains_int = List.exists begin function
+          | _, Int _ -> true
+          | _ -> false
+        end items in
+        let contains_str = List.exists begin function
+          | _, String _ | _, String2 _ -> true
+          | _ -> false
+        end items in
+        if contains_int && not contains_str then
+          Some (pos, Happly ((pos, "int"), []))
+        else if not contains_int && contains_str then
+          Some (pos, Happly ((pos, "string"), []))
+        else
+          (* If the list was empty, or if there was a mix of
+             ints and strings, then fallback to mixed *)
+          Some (pos, Happly ((pos, "mixed"), []))
+      | _ -> h) in
+    (* If the typehint was "string", convert to "Stringish" for now *)
+    let h = if maybe_enum <> None
+      then h
+      else (match h with
+        | Some (pos1, Happly ((pos2, "string"), [])) ->
+            Some (pos1, Happly ((pos2, "Stringish"), []))
+        | x -> x) in
+    let h = (match h with
+      | Some (p, ((Hoption _) as x)) -> Some (p, x)
+      | Some (p, ((Happly ((_, "mixed"), [])) as x)) -> Some (p, x)
+      | Some (p, h) ->
+        (* If a non-nullable attribute is not marked as "@required"
+           AND it does not have a non-null default value, make the
+           typehint nullable for now *)
+        if (is_required ||
+            (match default with
+              | None ->            false
+              | Some (_, Null) ->  false
+              | Some _ ->          true))
+          then Some (p, h)
+          else Some (p, Hoption (p, h))
+      | None -> None) in
+    let h = opt_map (hint env) h in
+    let cvl = List.map (class_var_ env) cvl in
+    let cvl = List.map (fill_cvar kl h) cvl in
+    cvl @ acc
   | Method _ -> acc
+  | TypeConst _ -> acc
 
 and class_static_method env x acc =
   match x with
   | Attributes _ -> acc
   | ClassUse _ -> acc
+  | XhpAttrUse _ -> acc
   | ClassTraitRequire _ -> acc
   | Const _ -> acc
   | ClassVars _ -> acc
+  | XhpAttr _ -> acc
   | Method m when snd m.m_name = SN.Members.__construct -> acc
   | Method m when List.mem Static m.m_kind -> method_ env m :: acc
   | Method _ -> acc
+  | TypeConst _ -> acc
 
 and class_method env sids cv_ids x acc =
   match x with
   | Attributes _ -> acc
   | ClassUse _ -> acc
+  | XhpAttrUse _ -> acc
   | ClassTraitRequire _ -> acc
   | Const _ -> acc
   | ClassVars _ -> acc
+  | XhpAttr _ -> acc
   | Method m when snd m.m_name = SN.Members.__construct -> acc
   | Method m when not (List.mem Static m.m_kind) ->
       let genv, lenv = env in
       let env = ({ genv with in_member_fun = true}, lenv) in
       method_ env m :: acc
   | Method _ -> acc
+  | TypeConst _ -> acc
+
+and class_typeconst env x acc =
+  match x with
+  | Attributes _ -> acc
+  | Const _ -> acc
+  | ClassUse _ -> acc
+  | XhpAttrUse _ -> acc
+  | ClassTraitRequire _ -> acc
+  | ClassVars _ -> acc
+  | XhpAttr _ -> acc
+  | Method _ -> acc
+  | TypeConst t -> typeconst env t :: acc
 
 and check_constant_expr (pos, e) =
   match e with
@@ -1170,6 +1319,7 @@ and class_var_ env (x, e) =
       Some (p, N.Cast ((p, N.Hany), (p, N.Null)))
   in
   N.({ cv_final = false;
+       cv_is_xhp = ((String.sub (snd x) 0 1) = ":");
        cv_visibility = Public;
        cv_type = None;
        cv_id = id;
@@ -1191,6 +1341,29 @@ and fill_cvar kl ty x =
     | Public    -> { x with N.cv_visibility = N.Public }
     | Protected -> { x with N.cv_visibility = N.Protected }
  ) x kl
+
+and typeconst env t =
+  let genv, lenv = env in
+  (* We use the same namespace as constants within the class so we cannot have
+   * a const and type const with the same name
+   *)
+  let name = Env.new_const env t.tconst_name in
+  (* if a typeconst is declared in an interface without an assigned type it is
+   * implicitly treated as abstract i.e.
+   *
+   * interface Foo { type const Bar;}
+   *
+   *  is the same as
+   * interface Foo { abstract type const Bar;}
+   *)
+  let abstract = match genv.cclass with
+    | Some {c_kind = Ast.Cinterface; _ } when t.tconst_type = None -> true
+    | _ -> List.mem Abstract t.tconst_kind in
+  let type_ = opt_map (hint env) t.tconst_type in
+  N.({ c_tconst_abstract = abstract;
+       c_tconst_name = name;
+       c_tconst_type = type_;
+     })
 
 and fun_kind env ft =
   match !((snd env).has_yield), ft with
@@ -1891,27 +2064,6 @@ and expr_lambda env f =
     f_fun_kind = f_kind;
   }
 
-and make_class_id env (p, x as cid) =
-  no_typedef env cid;
-  match x with
-    | x when x = SN.Classes.cParent ->
-      if (fst env).cclass = None then
-        let () = Errors.parent_outside_class p in
-        N.CI (p, SN.Classes.cUnknown)
-      else N.CIparent
-    | x when x = SN.Classes.cSelf ->
-      if (fst env).cclass = None then
-        let () = Errors.self_outside_class p in
-        N.CI (p, SN.Classes.cUnknown)
-      else N.CIself
-    | x when x = SN.Classes.cStatic -> if (fst env).cclass = None then
-        let () = Errors.static_outside_class p in
-        N.CI (p, SN.Classes.cUnknown)
-      else N.CIstatic
-    | x when x = "$this" -> N.CIvar (p, N.This)
-    | x when x.[0] = '$' -> N.CIvar (p, N.Lvar (Env.new_lvar env cid))
-    | _ -> N.CI (Env.class_name env cid)
-
 and casel env l =
   lfold (case env) SMap.empty l
 
@@ -1934,9 +2086,6 @@ and catch env acc (x1, x2, b) =
   let all_locals, b = branch env b in
   let acc = SMap.union all_locals acc in
   acc, (Env.class_name env x1, x2, b)
-
-and fieldl env l = List.map (field env) l
-and field env (e1, e2) = (expr env e1, expr env e2)
 
 and afield env = function
   | AFvalue e -> N.AFvalue (expr env e)

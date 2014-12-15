@@ -20,6 +20,8 @@
 
 #include "hphp/runtime/debugger/debugger_command.h"
 #include "hphp/runtime/debugger/cmd/all.h"
+#include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/complex-types.h"
 #include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/base/string-util.h"
@@ -34,7 +36,7 @@
 #include "hphp/util/string-vsnprintf.h"
 #include "hphp/runtime/base/config.h"
 #include <boost/scoped_ptr.hpp>
-#include "folly/Conv.h"
+#include <folly/Conv.h>
 
 #define USE_VARARGS
 #define PREFER_STDARG
@@ -1633,7 +1635,7 @@ do {                                         \
 
 // Parses the current command string. If invalid return false.
 // Otherwise, carry out the command and return true.
-// NB: the command may throw a variety of exceptions derrived from
+// NB: the command may throw a variety of exceptions derived from
 // DebuggerClientException.
 bool DebuggerClient::process() {
   TRACE(2, "DebuggerClient::process\n");

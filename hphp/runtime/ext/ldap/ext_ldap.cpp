@@ -17,9 +17,10 @@
 
 #include "hphp/runtime/ext/ldap/ext_ldap.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/util/thread-local.h"
-#include "folly/String.h"
+#include <folly/String.h>
 #include <lber.h>
 #include "hphp/util/text-util.h"
 
@@ -151,7 +152,7 @@ public:
 
   LDAPMessage *data;
 };
-IMPLEMENT_OBJECT_ALLOCATION(LdapResult)
+IMPLEMENT_RESOURCE_ALLOCATION(LdapResult)
 
 class LdapResultEntry : public SweepableResourceData {
 public:

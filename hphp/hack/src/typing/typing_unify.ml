@@ -15,6 +15,7 @@ module TUtils = Typing_utils
 module TDef = Typing_tdef
 module Inst = Typing_instantiate
 module TUEnv = Typing_unification_env
+module TAccess = Typing_taccess
 
 (* Most code -- notably the cases in unify_ -- do *not* need to thread through
  * the uenv, since for example just because we know an array<foo, bar> can't
@@ -78,6 +79,11 @@ and unify_with_uenv env (uenv1, ty1) (uenv2, ty2) =
       unify_with_uenv env (uenv1, ty1) (uenv2, ty2)
   | ty2, (r, Tapply ((_, x), argl)) when Typing_env.is_typedef env x ->
       let env, ty1 = TDef.expand_typedef env r x argl in
+      unify_with_uenv env (uenv1, ty1) (uenv2, ty2)
+  | (_, Taccess _), _
+  | _, (_, Taccess _) ->
+      let env, ty1 = TAccess.expand env ty1 in
+      let env, ty2 = TAccess.expand env ty2 in
       unify_with_uenv env (uenv1, ty1) (uenv2, ty2)
   | (r1, ty1), (r2, ty2) ->
       let r = unify_reason r1 r2 in
@@ -192,7 +198,7 @@ and unify_ env r1 ty1 r2 ty2 =
                | Tany | Tmixed | Tarray (_, _) | Tprim _ | Tgeneric (_, _)
                 | Toption _ | Tvar _ | Tabstract (_, _, _) | Ttuple _
                 | Tanon (_, _) | Tfun _ | Tunresolved _ | Tobject
-                | Tshape _ -> false
+                | Tshape _ | Taccess (_, _, _) -> false
              end
              ~do_:(fun error -> Errors.this_final id (Reason.to_pos r1) error)
           );
@@ -244,6 +250,11 @@ and unify_ env r1 ty1 r2 ty2 =
       let env = TUtils.apply_shape ~f env (r1, fdm1) (r2, fdm2) in
       let env = TUtils.apply_shape ~f env (r2, fdm2) (r1, fdm1) in
       env, Tshape fdm1
+  | Taccess _, _ | _, Taccess _ ->
+      let env, fty1 = TAccess.expand env (r1, ty1) in
+      let env, fty2 = TAccess.expand env (r2, ty2) in
+      let env, fty = unify env fty1 fty2 in
+      env, snd fty
   | (Tany | Tmixed | Tarray (_, _) | Tprim _ | Tgeneric (_, _) | Toption _
       | Tvar _ | Tabstract (_, _, _) | Tapply (_, _) | Ttuple _ | Tanon (_, _)
       | Tfun _ | Tunresolved _ | Tobject | Tshape _), _ ->
@@ -313,16 +324,6 @@ and unify_params env l1 l2 var1_opt =
     let env, _ = unify env x2 x1 in
     let env, rl = unify_params env rl1 rl2 var1_opt in
     env, (name, x2) :: rl
-
-let unify_nofail env ty1 ty2 =
-  Errors.try_
-    (fun () -> unify env ty1 ty2)
-    (fun _ ->
-      let res = Env.fresh_type() in
-      (* TODO: this can produce an unresolved of unresolved *)
-      let env, res = unify env res (fst ty1, Tunresolved [ty1; ty2]) in
-      env, res
-    )
 
 (*****************************************************************************)
 (* Exporting *)

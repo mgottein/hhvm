@@ -106,6 +106,9 @@ and ty_ =
   (* Tuple, with ordered list of the types of the elements of the tuple. *)
   | Ttuple        of ty list
 
+  (* Name of class, name of type const, remaining names of type consts *)
+  | Taccess       of static_class_id * Nast.sid * Nast.sid list
+
   (* An anonymous function, including the fun arity, and the identifier to
    * type the body of the function. (The actual closure is stored in
    * Typing_env.env.genv.anons) *)
@@ -172,6 +175,10 @@ and ty_ =
   (* Shape and types of each of the arms. *)
   | Tshape of ty Nast.ShapeMap.t
 
+and static_class_id =
+  | SCI of Nast.sid
+  | SCIstatic
+
 (* The type of a function AND a method.
  * A function has a min and max arity because of optional arguments *)
 and fun_type = {
@@ -200,6 +207,7 @@ and fun_params = fun_param list
 
 and class_elt = {
   ce_final       : bool;
+  ce_is_xhp_attr : bool;
   ce_override    : bool;
   (* true if this elt arose from require-extends or other mechanisms
      of hack "synthesizing" methods that were not written by the
@@ -228,6 +236,7 @@ and class_type = {
   tc_pos                 : Pos.t ;
   tc_tparams             : tparam list   ;
   tc_consts              : class_elt SMap.t;
+  tc_typeconsts          : class_elt SMap.t;
   tc_cvars               : class_elt SMap.t;
   tc_scvars              : class_elt SMap.t;
   tc_methods             : class_elt SMap.t;

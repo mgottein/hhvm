@@ -166,6 +166,8 @@ class ProfTransRec {
 typedef std::unique_ptr<ProfTransRec> ProfTransRecPtr;
 typedef std::unordered_map<FuncId, TransIDVec> FuncProfTransMap;
 
+using FuncIdSet = hphp_hash_set<FuncId>;
+
 /**
  * ProfData encapsulates the profiling data kept by the JIT.
  */
@@ -176,7 +178,7 @@ public:
   ProfData(const ProfData&)            = delete;
   ProfData& operator=(const ProfData&) = delete;
 
-  TransID                 numTrans()                  const;
+  uint32_t                numTrans()                  const;
   TransID                 curTransID()                const;
 
   bool                    hasTransRec(TransID id)     const;

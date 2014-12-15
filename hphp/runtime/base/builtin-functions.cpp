@@ -39,7 +39,7 @@
 #include "hphp/runtime/vm/unit-util.h"
 #include "hphp/runtime/vm/event-hook.h"
 #include "hphp/system/systemlib.h"
-#include "folly/Format.h"
+#include <folly/Format.h>
 #include "hphp/util/text-util.h"
 #include "hphp/util/string-vsnprintf.h"
 #include "hphp/runtime/base/file-util.h"
@@ -621,32 +621,6 @@ void throw_invalid_argument(const char *fmt, ...) {
 Variant throw_fatal_unset_static_property(const char *s, const char *prop) {
   raise_error("Attempt to unset static property %s::$%s", s, prop);
   return uninit_null();
-}
-
-Exception* generate_request_timeout_exception() {
-  Exception* ret = nullptr;
-  ThreadInfo *info = ThreadInfo::s_threadInfo.getNoCheck();
-  RequestInjectionData &data = info->m_reqInjectionData;
-
-  bool cli = RuntimeOption::ClientExecutionMode();
-  std::string exceptionMsg = cli ?
-    "Maximum execution time of " :
-    "entire web request took longer than ";
-  exceptionMsg += folly::to<std::string>(data.getTimeout());
-  exceptionMsg += cli ? " seconds exceeded" : " seconds and timed out";
-  Array exceptionStack = createBacktrace(BacktraceArgs()
-                                         .withSelf()
-                                         .withThis());
-  ret = new RequestTimeoutException(exceptionMsg, exceptionStack);
-  return ret;
-}
-
-Exception* generate_memory_exceeded_exception() {
-  Array exceptionStack = createBacktrace(BacktraceArgs()
-                                         .withSelf()
-                                         .withThis());
-  return new RequestMemoryExceededException(
-    "request has exceeded memory limit", exceptionStack);
 }
 
 Variant unserialize_ex(const char* str, int len,

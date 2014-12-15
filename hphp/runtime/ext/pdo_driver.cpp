@@ -19,6 +19,7 @@
 #include "hphp/runtime/ext/pdo_sqlite.h"
 #include "hphp/runtime/ext/pdo_mysql.h"
 #include "hphp/runtime/ext/std/ext_std_variable.h"
+#include "hphp/runtime/base/builtin-functions.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -65,8 +66,6 @@ PDOConnection *PDODriver::createConnection(const String& datasource,
 
 ///////////////////////////////////////////////////////////////////////////////
 // PDOConnection
-
-const char *PDOConnection::PersistentKey = "pdo_connection";
 
 PDOConnection::PDOConnection()
     : is_persistent(0), auto_commit(0), is_closed(0), alloc_own_columns(0),
@@ -275,4 +274,3 @@ bool PDOStatement::cursorCloser() {
 
 ///////////////////////////////////////////////////////////////////////////////
 }
-

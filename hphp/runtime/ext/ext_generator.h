@@ -20,6 +20,7 @@
 
 
 #include "hphp/runtime/base/base-includes.h"
+#include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/jit/types.h"
 #include "hphp/system/systemlib.h"
@@ -164,7 +165,7 @@ public:
     return gen;
   }
 
-  void yield(Offset resumeOffset, const Cell* key, const Cell& value);
+  void yield(Offset resumeOffset, const Cell* key, Cell value);
   void ret() { done(); }
   void fail() { done(); }
 

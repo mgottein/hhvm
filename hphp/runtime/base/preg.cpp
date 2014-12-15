@@ -25,6 +25,7 @@
 
 #include <folly/AtomicHashArray.h>
 
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/container-functions.h"
@@ -1177,7 +1178,7 @@ static Variant php_pcre_replace(const String& pattern, const String& subject,
           String stemp;
           if (callable) {
             if (replace_var.isObject()) {
-              stemp = replace_var.asCObjRef()->o_getClassName().asString()
+              stemp = replace_var.asCObjRef()->getClassName().asString()
                     + "::__invoke";
             } else {
               stemp = replace_var.toString();

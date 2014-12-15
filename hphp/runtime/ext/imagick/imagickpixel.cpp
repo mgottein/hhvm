@@ -16,6 +16,7 @@
 */
 
 #include "hphp/runtime/ext/imagick/ext_imagick.h"
+#include "hphp/runtime/base/array-init.h"
 
 #include <utility>
 
@@ -48,7 +49,7 @@ ALWAYS_INLINE
 WandResource<PixelWand> getPixelWand(const Variant& obj) {
   if (!obj.isObject()) {
     IMAGICKPIXEL_THROW("Invalid color parameter provided");
-  } else if (!obj.getObjectData()->o_instanceof(s_ImagickPixel)) {
+  } else if (!obj.getObjectData()->instanceof(s_ImagickPixel)) {
     IMAGICKPIXEL_THROW(
       "The parameter must be an instance of ImagickPixel or a string");
   } else {

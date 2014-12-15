@@ -148,7 +148,8 @@ inline void MemoryManager::FreeList::push(void* val, size_t size) {
   assert(size > 0 && size <= kMaxFreeSize);
   auto const node = static_cast<FreeNode*>(val);
   node->next = head;
-  if (debug) node->kind_size = HeaderKind::Free << 24 | size << 32;
+  // The extra store to initialize a free header here is expensive.
+  // Instead, initFree() initializes all free headers just before iterating
   head = node;
 }
 
@@ -289,9 +290,9 @@ void MemoryManager::smartFreeSizeBig(void* vp, size_t bytes) {
   m_stats.usage -= bytes;
   // Since we account for these direct allocations in our usage and adjust for
   // them on allocation, we also need to adjust for them negatively on free.
-  JEMALLOC_STATS_ADJUST(&m_stats, -bytes);
-  FTRACE(3, "smartFreeBig: {} ({} bytes)\n", vp, bytes);
-  smartFreeBig(static_cast<BigNode*>(debugPreFree(vp, bytes, 0)) - 1);
+  m_stats.borrow(-bytes);
+  FTRACE(3, "smartFreeSizeBig: {} ({} bytes)\n", vp, bytes);
+  m_heap.freeBig(debugPreFree(vp, bytes, 0));
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -315,13 +316,6 @@ void* MemoryManager::smartMallocSizeLogged(uint32_t size) {
   auto const retptr = smartMallocSize(size);
   if (memory_profiling) { logAllocation(retptr, size); }
   return retptr;
-}
-
-ALWAYS_INLINE
-void* MemoryManager::smartMallocSizeLoggedTracked(uint32_t size) {
-  auto const retptr = smartMallocSize(size);
-  if (memory_profiling) { logAllocation(retptr, size); }
-  return track(retptr);
 }
 
 ALWAYS_INLINE
@@ -354,22 +348,6 @@ ALWAYS_INLINE
 void MemoryManager::objFreeLogged(void* vp, size_t size) {
   if (memory_profiling) { logDeallocation(vp); }
   objFree(vp, size);
-}
-
-ALWAYS_INLINE
-void* MemoryManager::track(void* p) {
-  if (UNLIKELY(m_trackingInstances)) {
-    return trackSlow(p);
-  }
-  return p;
-}
-
-ALWAYS_INLINE
-void* MemoryManager::untrack(void* p) {
-  if (UNLIKELY(m_trackingInstances)) {
-    return untrackSlow(p);
-  }
-  return p;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -447,9 +425,6 @@ inline void MemoryManager::resetExternalStats() { resetStatsImpl(false); }
 
 ALWAYS_INLINE
 void MemoryManager::setObjectTracking(bool val) {
-  if (val) {
-    m_instances = std::unordered_set<void*>();
-  }
   m_trackingInstances = val;
 }
 
@@ -457,7 +432,6 @@ ALWAYS_INLINE
 bool MemoryManager::getObjectTracking() {
   return m_trackingInstances;
 }
-
 
 }
 

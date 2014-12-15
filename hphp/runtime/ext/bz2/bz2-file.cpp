@@ -15,6 +15,7 @@
    +----------------------------------------------------------------------+
 */
 #include "hphp/runtime/ext/bz2/bz2-file.h"
+#include "hphp/runtime/base/array-init.h"
 
 namespace HPHP {
 
@@ -23,12 +24,12 @@ namespace HPHP {
 BZ2File::BZ2File(): m_bzFile(nullptr) {
   m_innerFile = newres<PlainFile>();
   m_innerFile->unregister();
-  m_isLocal = m_innerFile->m_isLocal;
+  m_isLocal = m_innerFile->isLocal();
 }
 
 BZ2File::BZ2File(PlainFile* innerFile): m_bzFile(nullptr) {
   m_innerFile = innerFile;
-  m_isLocal = m_innerFile->m_isLocal;
+  m_isLocal = m_innerFile->isLocal();
 }
 
 BZ2File::~BZ2File() {

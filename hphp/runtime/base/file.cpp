@@ -40,7 +40,7 @@
 #include "hphp/util/logger.h"
 #include "hphp/util/process.h"
 
-#include "folly/String.h"
+#include <folly/String.h>
 
 #include <algorithm>
 #include <sys/file.h>
@@ -146,8 +146,8 @@ Resource File::Open(const String& filename, const String& mode,
 File::File(bool nonblocking /* = true */,
            const String& wrapper /* = null_string */,
            const String& stream_type /* = empty_string_ref */)
-  : m_isLocal(false), m_fd(-1), m_closed(false), m_nonblocking(nonblocking),
-    m_writepos(0), m_readpos(0), m_position(0), m_eof(false),
+  : m_fd(-1), m_isLocal(false), m_closed(false), m_nonblocking(nonblocking),
+    m_eof(false), m_position(0), m_writepos(0), m_readpos(0),
     m_wrapperType(wrapper.get()), m_streamType(stream_type.get()),
     m_buffer(nullptr), m_bufferSize(CHUNK_SIZE) {
 }

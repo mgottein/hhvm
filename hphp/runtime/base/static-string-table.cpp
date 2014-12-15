@@ -22,7 +22,7 @@
 
 #include "hphp/runtime/server/memory-stats.h"
 
-#include "folly/AtomicHashMap.h"
+#include <folly/AtomicHashMap.h>
 
 namespace HPHP {
 
@@ -88,7 +88,7 @@ struct strintern_hash {
       return to_sdata(k)->hash();
     }
     auto const slice = *to_sslice(k);
-    return hash_string_inline(slice.ptr, slice.len);
+    return hash_string(slice.ptr, slice.len);
   }
 };
 

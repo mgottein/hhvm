@@ -18,6 +18,7 @@
 #include "hphp/runtime/server/server.h"
 #include "hphp/runtime/server/upload.h"
 #include "hphp/runtime/server/server-stats.h"
+#include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/file.h"
 #include "hphp/runtime/base/string-util.h"
 #include "hphp/runtime/base/datetime.h"
@@ -37,7 +38,7 @@
 #include "hphp/util/timer.h"
 #include "hphp/runtime/base/hardware-counter.h"
 #include "hphp/runtime/ext/string/ext_string.h"
-#include "folly/String.h"
+#include <folly/String.h>
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -538,23 +539,32 @@ String Transport::getMimeType() {
 ///////////////////////////////////////////////////////////////////////////////
 // cookies
 
+namespace {
+
+// Make sure a component (name, path, value) of a cookie does not
+// contain any illegal characters.  Throw a fatal exception if it
+// does.
+void validateCookieString(const String& str, const char* component) {
+  if(!str.empty() && strpbrk(str.data(), "=,; \t\r\n\013\014")) {
+    raise_error("Cookie %s can not contain any of the following "
+                "'=,; \\t\\r\\n\\013\\014'", component);
+  }
+}
+
+}
+
 bool Transport::setCookie(const String& name, const String& value, int64_t expire /* = 0 */,
                           const String& path /* = "" */, const String& domain /* = "" */,
                           bool secure /* = false */,
                           bool httponly /* = false */,
                           bool encode_url /* = true */) {
-  if (!name.empty() && strpbrk(name.data(), "=,; \t\r\n\013\014")) {
-    Logger::Warning("Cookie names can not contain any of the following "
-                    "'=,; \\t\\r\\n\\013\\014'");
-    return false;
+  validateCookieString(name, "names");
+
+  if (!encode_url) {
+    validateCookieString(value, "values");
   }
 
-  if (!encode_url &&
-      !value.empty() && strpbrk(value.data(), ",; \t\r\n\013\014")) {
-    Logger::Warning("Cookie values can not contain any of the following "
-                    "',; \\t\\r\\n\\013\\014'");
-    return false;
-  }
+  validateCookieString(path, "paths");
 
   String encoded_value;
   int len = 0;

@@ -49,6 +49,7 @@ struct TReqInfo;
 struct Label;
 struct MCGenerator;
 struct AsmInfo;
+struct HTS;
 
 extern MCGenerator* mcg;
 extern void* interpOneEntryPoints[];
@@ -106,7 +107,11 @@ struct CodeGenFixups {
     m_tletFrozen = frozen;
   }
 
-  void process(GrowableVector<IncomingBranch>* inProgressTailBranches);
+  void process_only(GrowableVector<IncomingBranch>* inProgressTailBranches);
+  void process(GrowableVector<IncomingBranch>* inProgressTailBranches) {
+    process_only(inProgressTailBranches);
+    clear();
+  }
   bool empty() const;
   void clear();
 };
@@ -126,20 +131,20 @@ struct RelocationInfo {
     return adjustedAddressBefore(const_cast<TCA>(addr));
   }
   void rewind(TCA start, TCA end);
-  void markAddressImmediates(std::set<TCA> ai) {
+  void markAddressImmediates(const std::set<TCA>& ai) {
     m_addressImmediates.insert(ai.begin(), ai.end());
   }
   bool isAddressImmediate(TCA ip) {
     return m_addressImmediates.count(ip);
   }
   typedef std::vector<std::pair<TCA,TCA>> RangeVec;
-  RangeVec::iterator begin() { return m_dstRanges.begin(); }
-  RangeVec::iterator end() { return m_dstRanges.end(); }
+  const RangeVec& srcRanges() { return m_srcRanges; }
+  const RangeVec& dstRanges() { return m_dstRanges; }
  private:
   RangeVec m_srcRanges;
   RangeVec m_dstRanges;
   /*
-   * maps from src address, to range of destination addresse
+   * maps from src address, to range of destination address
    * This is because we could insert nops before the instruction
    * corresponding to src. Most things want the address of the
    * instruction corresponding to the src instruction; but eg
@@ -275,7 +280,7 @@ public:
   bool profileSrcKey(SrcKey sk) const;
   void getPerfCounters(Array& ret);
   bool reachedTranslationLimit(SrcKey, const SrcRec&) const;
-  void traceCodeGen();
+  void traceCodeGen(HTS&);
   void recordGdbStub(const CodeBlock& cb, TCA start, const char* name);
 
   /*
@@ -343,7 +348,7 @@ private:
   TCA createTranslation(const TranslArgs& args);
   TCA retranslate(const TranslArgs& args);
   TCA translate(const TranslArgs& args);
-  void translateWork(const TranslArgs& args);
+  TCA translateWork(const TranslArgs& args);
 
   TCA lookupTranslation(SrcKey sk) const;
   TCA retranslateOpt(TransID transId, bool align);
@@ -405,6 +410,8 @@ extern void emitIncStat(Vout& v, Stats::StatCounter stat, int n = 1,
 
 void emitServiceReq(Vout& v, TCA stub_block, ServiceRequest req,
                     const ServiceReqArgVec& argv);
+
+bool shouldPGOFunc(const Func& func);
 
 }}
 

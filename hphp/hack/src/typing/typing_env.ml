@@ -191,6 +191,16 @@ let rec debug stack env (r, ty) =
       Printf.printf "App %s" (snd x);
       o "<"; List.iter (fun x -> debug stack env x; o ", ") argl;
       o ">"
+  | Taccess (root, id, ids) ->
+      let root_str =
+        match root with
+        | SCI (_, class_id) -> class_id
+        | SCIstatic -> "static"
+      in
+      let idl = id :: ids in
+      let str =
+        List.fold_left (fun acc (_, sid) -> acc ^ "::" ^ sid) root_str idl in
+      o str;
   | Tany -> o "X"
   | Tanon _ -> o "anonymous"
   | Tfun ft ->
@@ -349,6 +359,10 @@ let get_const env class_ mid =
   let dep = Dep.Const (class_.tc_name, mid) in
   Typing_deps.add_idep env.genv.droot dep;
   env, SMap.get mid class_.tc_consts
+
+let get_typeconst_type env class_ typeconst_name =
+  let tconst_opt = SMap.get typeconst_name class_.tc_typeconsts in
+  env, opt_map (fun tc -> tc.ce_type) tconst_opt
 
 (* Used to access "global constants". That is constants that were
  * introduced with "const X = ...;" at topelevel, or "define('X', ...);"
@@ -561,16 +575,7 @@ module FakeMembers = struct
     string_of_int obj_name^"->"^member_name
 
   let make_static_id cid member_name =
-    let class_name =
-      match cid with
-      | CIparent -> SN.Classes.cParent
-      | CIself -> SN.Classes.cSelf
-      | CIstatic -> SN.Classes.cStatic
-      | CIvar (_, This) -> "$this"
-      | CIvar (_, Lvar (_, x)) -> "$"^string_of_int(x)
-      | CIvar _ -> assert false
-      | CI (_, x) -> x
-    in
+    let class_name = class_id_to_str cid in
     class_name^"::"^member_name
 
   let get env obj member_name =

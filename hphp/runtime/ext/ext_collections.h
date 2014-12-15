@@ -19,11 +19,15 @@
 #define incl_HPHP_EXT_COLLECTION_H_
 
 #include "hphp/runtime/base/base-includes.h"
-#include <limits>
-#include "hphp/system/systemlib.h"
-#include "hphp/runtime/base/packed-array-defs.h"
-#include "hphp/runtime/base/mixed-array.h"
+#include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/mixed-array-defs.h"
+#include "hphp/runtime/base/mixed-array.h"
+#include "hphp/runtime/base/packed-array-defs.h"
+#include "hphp/runtime/base/smart-object.h"
+#include "hphp/system/systemlib.h"
+
+
+#include <limits>
 
 #define DECLARE_COLLECTION_MAGIC_METHODS()           \
   Variant t___get(Variant name);                     \
@@ -1554,7 +1558,7 @@ class c_MapIterator : public ExtObjectDataFlags<ObjectData::IsCppBuiltin |
  */
 class BaseSet : public HashCollection {
  public:
-  void addAllKeysOf(const Cell& container);
+  void addAllKeysOf(Cell container);
   void addAll(const Variant& t);
 
   void init(const Variant& t);
@@ -2087,11 +2091,6 @@ ObjectData* collectionDeepCopyPair(c_Pair* pair);
 ObjectData* newCollectionHelper(uint32_t type, uint32_t size);
 
 ///////////////////////////////////////////////////////////////////////////////
-
-inline bool isOptimizableCollectionClass(const Class* klass) {
-  return klass == c_Vector::classof() || klass == c_Map::classof() ||
-    klass == c_Pair::classof();
-}
 
 void collectionSerialize(ObjectData* obj, VariableSerializer* serializer);
 

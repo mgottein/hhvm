@@ -69,9 +69,13 @@ void Vunit::freeScratchBlock(Vlabel l) {
 Vreg Vunit::makeConst(uint64_t v) {
   auto it = cpool.find(v);
   if (it != cpool.end()) return it->second;
-  auto r = makeReg();
-  cpool[v] = r;
-  return r;
+  return cpool[v] = makeReg();
+}
+
+Vreg Vunit::makeConst(bool b) {
+  auto it = cpool.find(b);
+  if (it != cpool.end()) return it->second;
+  return cpool[b] = makeReg();
 }
 
 Vreg Vunit::makeConst(double d) {
@@ -115,6 +119,7 @@ Vout& Vout::operator<<(const Vinstr& inst) {
   auto& code = m_unit.blocks[m_block].code;
   code.emplace_back(inst);
   code.back().origin = m_origin;
+  FTRACE(6, "Vout << {}\n", show(m_unit, inst));
   return *this;
 }
 
@@ -165,6 +170,7 @@ private:
   void emit(copy2& i);
   void emit(debugtrap& i) { a->int3(); }
   void emit(fallthru& i) {}
+  void emit(ldimmb& i);
   void emit(ldimm& i);
   void emit(fallback& i);
   void emit(fallbackcc i);
@@ -235,13 +241,17 @@ private:
   void emit(lea& i);
   void emit(leap& i) { a->lea(i.s, i.d); }
   void emit(loaddqu& i) { a->movdqu(i.s, i.d); }
+  void emit(loadb& i) { a->loadb(i.s, i.d); }
   void emit(loadl& i) { a->loadl(i.s, i.d); }
   void emit(loadqp& i) { a->loadq(i.s, i.d); }
   void emit(loadsd& i) { a->movsd(i.s, i.d); }
   void emit(loadzbl& i) { a->loadzbl(i.s, i.d); }
+  void emit(loadzbq& i) { a->loadzbl(i.s, Reg32(i.d)); }
+  void emit(loadzlq& i) { a->loadl(i.s, Reg32(i.d)); }
   void emit(movb& i) { a->movb(i.s, i.d); }
   void emit(movl& i) { a->movl(i.s, i.d); }
   void emit(movzbl& i) { a->movzbl(i.s, i.d); }
+  void emit(movzbq& i) { a->movzbl(i.s, Reg32(i.d)); }
   void emit(mulsd& i) { commute(i); a->mulsd(i.s0, i.d); }
   void emit(neg& i) { unary(i); a->neg(i.d); }
   void emit(nop& i) { a->nop(); }
@@ -254,13 +264,11 @@ private:
   void emit(psllq& i) { binary(i); a->psllq(i.s0, i.d); }
   void emit(psrlq& i) { binary(i); a->psrlq(i.s0, i.d); }
   void emit(push& i) { a->push(i.s); }
-  void emit(pushl& i) { a->pushl(i.s); }
   void emit(pushm& i) { a->push(i.s); }
   void emit(roundsd& i) { a->roundsd(i.dir, i.s, i.d); }
   void emit(ret& i) { a->ret(); }
   void emit(sarq& i) { unary(i); a->sarq(i.d); }
   void emit(sarqi& i) { binary(i); a->sarq(i.s0, i.d); }
-  void emit(sbbl& i) { noncommute(i); a->sbbl(i.s0, i.d); }
   void emit(setcc& i) { a->setcc(i.cc, i.d); }
   void emit(shlli& i) { binary(i); a->shll(i.s0, i.d); }
   void emit(shlq& i) { unary(i); a->shlq(i.d); }
@@ -277,6 +285,7 @@ private:
   void emit(storesd& i) { a->movsd(i.s, i.m); }
   void emit(storew& i) { a->storew(i.s, i.m); }
   void emit(storewi& i) { a->storew(i.s, i.m); }
+  void emit(subbi& i) { binary(i); a->subb(i.s0, i.d); }
   void emit(subl& i) { noncommute(i); a->subl(i.s0, i.d); }
   void emit(subli& i) { binary(i); a->subl(i.s0, i.d); }
   void emit(subq& i) { noncommute(i); a->subq(i.s0, i.d); }
@@ -545,6 +554,16 @@ void Vgen::emit(kpcall& i) {
   a->call(i.target);
 }
 
+void Vgen::emit(ldimmb& i) {
+  auto val = i.s.b();
+  assert_not_implemented(i.d.isGP());
+  if (val == 0 && !i.saveflags) {
+    a->xorb(i.d, i.d);
+  } else {
+    a->movb(val, i.d);
+  }
+}
+
 void Vgen::emit(ldimm& i) {
   auto val = i.s.q();
   if (i.d.isGP()) {
@@ -649,8 +668,7 @@ void Vgen::emit(jit::vector<Vlabel>& labels) {
 
   // This is under the printir tracemod because it mostly shows you IR and
   // machine code, not vasm and machine code (not implemented).
-  bool shouldUpdateAsmInfo = !!m_asmInfo
-    && Trace::moduleEnabledRelease(HPHP::Trace::printir, kCodeGenLevel);
+  bool shouldUpdateAsmInfo = !!m_asmInfo;
 
   std::vector<TransBCMapping>* bcmap = nullptr;
   if (mcg->tx().isTransDBEnabled() || RuntimeOption::EvalJitUseVtuneAPI) {
@@ -933,6 +951,21 @@ static void lowerShift(Vunit& unit, Vlabel b, size_t iInst) {
   vector_splice(unit.blocks[b].code, iInst, 1, unit.blocks[scratch].code);
 }
 
+static void lowerAbsdbl(Vunit& unit, Vlabel b, size_t iInst) {
+  auto const& inst = unit.blocks[b].code[iInst];
+  auto const& absdbl = inst.absdbl_;
+  auto scratch = unit.makeScratchBlock();
+  SCOPE_EXIT { unit.freeScratchBlock(scratch); };
+  Vout v(unit, scratch, inst.origin);
+
+  // clear the high bit
+  auto tmp = v.makeReg();
+  v << psllq{1, absdbl.s, tmp};
+  v << psrlq{1, tmp, absdbl.d};
+
+  vector_splice(unit.blocks[b].code, iInst, 1, unit.blocks[scratch].code);
+}
+
 static void lowerVcall(Vunit& unit, Vlabel b, size_t iInst) {
   auto& blocks = unit.blocks;
   auto& inst = blocks[b].code[iInst];
@@ -987,6 +1020,16 @@ static void lowerVcall(Vunit& unit, Vlabel b, size_t iInst) {
     auto& targets = vinvoke.targets;
     v << unwind{{targets[0], targets[1]}};
 
+    // Insert an lea fixup for any stack args at the beginning of the catch
+    // block.
+    if (auto rspOffset = ((stkArgs.size() + 1) & ~1) * sizeof(uintptr_t)) {
+      auto& taken = unit.blocks[targets[1]].code;
+      assert(taken.front().op == Vinstr::landingpad);
+      Vinstr v{lea{rsp[rspOffset], rsp}};
+      v.origin = taken.front().origin;
+      taken.insert(taken.begin() + 1, v);
+    }
+
     // Write out the code so far to the end of b. Remaining code will be
     // emitted to the next block.
     vector_splice(blocks[b].code, iInst, 1, blocks[scratch].code);
@@ -1021,6 +1064,7 @@ static void lowerVcall(Vunit& unit, Vlabel b, size_t iInst) {
       break;
     }
     case DestType::SSA:
+    case DestType::Byte:
       // copy the single-register result to dests[0]
       assert(dests.size() == 1);
       assert(dests[0].isValid());
@@ -1088,6 +1132,10 @@ static void lowerForX64(Vunit& unit, const Abi& abi) {
           lowerShift<shl, shlq>(unit, Vlabel{ib}, ii);
           break;
 
+        case Vinstr::absdbl:
+          lowerAbsdbl(unit, Vlabel{ib}, ii);
+          break;
+
         case Vinstr::defvmsp:
           inst = copy{rVmSp, inst.defvmsp_.d};
           break;
@@ -1096,8 +1144,16 @@ static void lowerForX64(Vunit& unit, const Abi& abi) {
           inst = copy{inst.syncvmsp_.s, rVmSp};
           break;
 
-        case Vinstr::syncvmfp:
-          inst = copy{inst.syncvmfp_.s, rVmFp};
+        case Vinstr::ldretaddr:
+          inst = pushm{inst.ldretaddr_.s};
+          break;
+
+        case Vinstr::movretaddr:
+          inst = load{*rsp, inst.movretaddr_.d};
+          break;
+
+        case Vinstr::retctrl:
+          inst = ret{kCrossTraceRegs};
           break;
 
         default:

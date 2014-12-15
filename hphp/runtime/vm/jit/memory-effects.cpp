@@ -28,7 +28,7 @@ namespace {
 
 //////////////////////////////////////////////////////////////////////
 
-ALocation pointee(const SSATmp* ptr) {
+AliasClass pointee(const SSATmp* ptr) {
   always_assert(ptr->type().isPtr());
 
   if (ptr->type() <= Type::PtrToFrameGen) {
@@ -183,7 +183,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
 
   case EndCatch:
   case NativeImpl:
-  case TryEndCatch:
     return UnknownEffects {};
 
   // NB: on the failure path, these C++ helpers do a fixup and read frame
@@ -278,8 +277,8 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     };
 
   case StLocPseudoMain:
-    // This can store to globals or locals, but we don't have globals in
-    // ALocation yet.
+    // This can store to globals or locals, but we don't have globals supported
+    // in AliasClass yet.
     return PureStore { AUnknown };
 
   case ClosureStaticLocInit:
@@ -330,7 +329,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     };
 
   case CheckRefInner:
-    // We don't have ALocations for refs yet.
+    // We don't have AliasClass support for refs yet.
     return MayLoadStore { ANonFrame, AEmpty };
   case LdRef:
     return PureLoad { ANonFrame };
@@ -461,7 +460,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case NewMIArray:
   case NewMixedArray:
   case NewMSArray:
-  case NewPackedArray:
   case NewStructArray:
   case NewVArray:
   case AllocPackedArray:
@@ -533,7 +531,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case SubDbl:
   case SubInt:
   case SubIntO:
-  case TrackLoc:
   case XorBool:
   case XorInt:
   case OrInt:
@@ -612,7 +609,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case RestoreErrorLevel:
   case AFWHBlockOn:
   case CheckCold:
-  case CheckDefinedClsEq:
   case CheckInitProps:
   case CheckInitSProps:
   case CheckRefs:
@@ -731,7 +727,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case LdWHResult:
   case LdWHState:
   case LookupClsRDSHandle:
-  case TypeProfileFunc:
   case AFWHPrepareChild:
   case CoerceCellToDbl:
   case CoerceCellToInt:
@@ -869,12 +864,12 @@ MemEffects memory_effects(const IRInstruction& inst) {
     );
   };
 
-  auto check = [&] (ALocation loc) {
-    if (auto const fr = loc.frame()) {
+  auto check = [&] (AliasClass a) {
+    if (auto const fr = a.frame()) {
       check_fp(fr->fp);
       return;
     }
-    if (auto const pr = loc.prop()) {
+    if (auto const pr = a.prop()) {
       check_obj(pr->obj);
     }
   };
@@ -884,9 +879,9 @@ MemEffects memory_effects(const IRInstruction& inst) {
   match<void>(
     ret,
     [&] (MayLoadStore m)    { check(m.loads); check(m.stores); },
-    [&] (PureLoad m)        { check(m.loc); },
-    [&] (PureStore m)       { check(m.loc); },
-    [&] (PureStoreNT m)     { check(m.loc); },
+    [&] (PureLoad m)        { check(m.src); },
+    [&] (PureStore m)       { check(m.dst); },
+    [&] (PureStoreNT m)     { check(m.dst); },
     [&] (IterEffects m)     { check_fp(m.fp); },
     [&] (IterEffects2 m)    { check_fp(m.fp); },
     [&] (KillFrameLocals m) { check_fp(m.fp); },
@@ -910,13 +905,13 @@ MemEffects canonicalize(MemEffects me) {
       return MayLoadStore { canonicalize(l.loads), canonicalize(l.stores) };
     },
     [&] (PureLoad l) -> R {
-      return PureLoad { canonicalize(l.loc) };
+      return PureLoad { canonicalize(l.src) };
     },
     [&] (PureStore l) -> R {
-      return PureStore { canonicalize(l.loc), l.value };
+      return PureStore { canonicalize(l.dst), l.value };
     },
-    [&] (PureStoreNT l)     -> R {
-      return PureStoreNT { canonicalize(l.loc), l.value };
+    [&] (PureStoreNT l) -> R {
+      return PureStoreNT { canonicalize(l.dst), l.value };
     },
     [&] (KillFrameLocals l)   -> R { return l; },
     [&] (IterEffects l)       -> R { return l; },
@@ -938,9 +933,9 @@ std::string show(MemEffects effects) {
     [&] (MayLoadStore m) {
       return sformat("mls({} ; {})", show(m.loads), show(m.stores));
     },
-    [&] (PureLoad m)        { return sformat("ld({})", show(m.loc)); },
-    [&] (PureStore m)       { return sformat("st({})", show(m.loc)); },
-    [&] (PureStoreNT m)     { return sformat("stNT({})", show(m.loc)); },
+    [&] (PureLoad m)        { return sformat("ld({})", show(m.src)); },
+    [&] (PureStore m)       { return sformat("st({})", show(m.dst)); },
+    [&] (PureStoreNT m)     { return sformat("stNT({})", show(m.dst)); },
     [&] (IterEffects)       { return "IterEffects"; },
     [&] (IterEffects2)      { return "IterEffects2"; },
     [&] (KillFrameLocals)   { return "KillFrameLocals"; },

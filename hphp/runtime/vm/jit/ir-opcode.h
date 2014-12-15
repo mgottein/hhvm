@@ -20,7 +20,7 @@
 #include <type_traits>
 #include <vector>
 
-#include "folly/Range.h"
+#include <folly/Range.h>
 
 #include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/vm/jit/type.h"
@@ -37,7 +37,7 @@ struct IRUnit;
 struct IRInstruction;
 struct SSATmp;
 struct LocalStateHook;
-struct FrameState;
+struct FrameStateMgr;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -57,7 +57,7 @@ struct FrameState;
  *     DBox(N)      single dst has boxed type of src N
  *     DRefineS(N)  single dst's type is intersection of src N and paramType
  *     DParam       single dst has type of the instruction's type parameter
- *     DParamNRel   DParam "no relax", like DParam except the dest can't relax
+ *     DParamMayRelax like DParam, except type may relax
  *     DParamPtr(k) like DParam, but the param must be a PtrTo* of kind k
  *     DUnboxPtr    Unboxed PtrTo*T; adds possibility of pointing into a ref
  *     DBoxPtr      Boxed PtrTo*T
@@ -272,28 +272,6 @@ Type outputType(const IRInstruction*, int dstId = 0);
  * Check that an instruction has operands of allowed types.
  */
 bool checkOperandTypes(const IRInstruction*, const IRUnit* unit = nullptr);
-
-
-int minstrBaseIdx(Opcode opc);
-int minstrBaseIdx(const IRInstruction* inst);
-
-struct MInstrEffects {
-  MInstrEffects(Opcode op, Type base);
-
-  static bool supported(Opcode op);
-  static bool supported(const IRInstruction* inst);
-
-  /*
-   * MInstrEffects::get is used to allow multiple different consumers to deal
-   * with the side effects of vector instructions. It takes an instruction and
-   * a LocalStateHook, and a FrameState, which are defined in frame-state.h.
-   */
-  static void get(const IRInstruction*, const FrameState&, LocalStateHook&);
-
-  Type baseType;
-  bool baseTypeChanged;
-  bool baseValChanged;
-};
 
 using TcaRange = folly::Range<TCA>;
 

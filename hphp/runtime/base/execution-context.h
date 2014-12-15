@@ -170,7 +170,8 @@ public:
   /**
    * Output buffering.
    */
-  void obStart(const Variant& handler = uninit_null());
+  void obStart(const Variant& handler = uninit_null(),
+               int chunk_size = 0);
   String obCopyContents();
   String obDetachContents();
   int obGetContentLength();
@@ -186,8 +187,18 @@ public:
   void obProtect(bool on); // making sure obEnd() never passes current level
   void flush();
   StringBuffer* swapOutputBuffer(StringBuffer* sb) {
-    auto current = m_out;
-    m_out = sb;
+    // If we are swapping output buffers (currently done by the debugger)
+    // then any current chunking is off the table
+    if (m_out != nullptr) {
+      if (sb != &m_out->oss) {
+        m_remember_chunk =  m_out->chunk_size;
+        m_out->chunk_size = 0;
+      } else if (sb == &m_out->oss) { // pointing to same thing,swapping back in
+        m_out->chunk_size = m_remember_chunk;
+      }
+    }
+    auto current = m_sb;
+    m_sb = sb;
     return current;
   }
   String getRawPostData() const { return m_rawPostData; }
@@ -225,6 +236,7 @@ public:
   bool callUserErrorHandler(const Exception &e, int errnum,
                             bool swallowExceptions);
   void recordLastError(const Exception &e, int errnum = 0);
+  void clearLastError();
   bool onFatalError(const Exception &e); // returns handled
   bool onUnhandledException(Object e);
   ErrorState getErrorState() const { return m_errorState; }
@@ -269,11 +281,12 @@ public:
 
 private:
   struct OutputBuffer {
-    explicit OutputBuffer(Variant&& h)
-      : oss(8192), handler(std::move(h))
+    explicit OutputBuffer(Variant&& h, int chunk_sz)
+      : oss(8192), handler(std::move(h)), chunk_size(chunk_sz)
     {}
     StringBuffer oss;
     Variant handler;
+    int chunk_size;
   };
 
 private:
@@ -347,7 +360,7 @@ OPCODES
 #undef O
 
   void contEnterImpl(IOP_ARGS);
-  void yield(IOP_ARGS, const Cell* key, const Cell& value);
+  void yield(IOP_ARGS, const Cell* key, Cell value);
   void asyncSuspendE(IOP_ARGS, int32_t iters);
   void asyncSuspendR(IOP_ARGS);
   void ret(IOP_ARGS);
@@ -397,7 +410,7 @@ public:
   Cell lookupClsCns(const StringData* cls,
                     const StringData* cns);
 
-  // Get the next outermost VM frame, even accross re-entry
+  // Get the next outermost VM frame, even across re-entry
   ActRec* getOuterVMFrame(const ActRec* ar);
 
   std::string prettyStack(const std::string& prefix) const;
@@ -539,7 +552,7 @@ public:
                   ctx.invName, argc, argv);
   }
   void resumeAsyncFunc(Resumable* resumable, ObjectData* freeObj,
-                       const Cell& awaitResult);
+                       Cell awaitResult);
   void resumeAsyncFuncThrow(Resumable* resumable, ObjectData* freeObj,
                             ObjectData* exception);
 
@@ -564,7 +577,9 @@ private:
   String m_cwd;
 
   // output buffering
-  StringBuffer* m_out; // current output buffer
+  StringBuffer* m_sb = nullptr; // current buffer being populated with data
+  OutputBuffer* m_out = nullptr; // current OutputBuffer
+  int m_remember_chunk = 0; // in case the output buffer is swapped
   smart::list<OutputBuffer> m_buffers; // a stack of output buffers
   bool m_insideOBHandler{false};
   bool m_implicitFlush;

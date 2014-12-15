@@ -17,6 +17,7 @@
 
 #include "hphp/vixl/a64/macro-assembler-a64.h"
 
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/ext/ext_closure.h"
 #include "hphp/runtime/vm/jit/abi-arm.h"
 #include "hphp/runtime/vm/jit/code-gen-helpers-arm.h"
@@ -346,6 +347,7 @@ TCA emitCallArrayPrologue(Func* func, DVFuncletsVec& dvs) {
                 SrcKey(func, dvs[i].second, false));
   }
   emitBindJmp(mainCode, frozenCode, SrcKey(func, func->base(), false));
+  mcg->cgFixups().process(nullptr);
   return start;
 }
 

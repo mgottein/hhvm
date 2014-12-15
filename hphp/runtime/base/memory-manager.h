@@ -22,7 +22,7 @@
 #include <utility>
 #include <set>
 
-#include "folly/Memory.h"
+#include <folly/Memory.h>
 
 #include "hphp/util/alloc.h" // must be included before USE_JEMALLOC is used
 #include "hphp/util/compilation-flags.h"
@@ -110,13 +110,14 @@ template<class T> void smart_delete_array(T* t, size_t count);
 
 enum class HeaderKind : uint8_t {
   // ArrayKind aliases
-  Packed, Mixed, StrMap, IntMap, VPacked, Empty, Shared, Globals, Proxy,
+  Packed, Mixed, StrMap, IntMap, VPacked, Empty, Apc, Globals, Proxy,
   // Other ordinary refcounted heap objects
   String, Object, Resource, Ref,
   Native, // a NativeData header preceding an HNI ObjectData
   Sweepable, // a Sweepable header preceding an ObjectData ResourceData
-  Small, // small smart_malloc'd block
-  Big, // big smart_malloc'd or size-tracked block
+  SmallMalloc, // small smart_malloc'd block
+  BigMalloc, // big smart_malloc'd block
+  BigObj, // big size-tracked object (valid header follows BigNode)
   Free, // small block in a FreeList
   Hole, // wasted space not in any freelist
   Debug // a DebugHeader
@@ -154,7 +155,7 @@ struct DebugHeader {
 /*
  * Slabs are consumed via bump allocation.  The individual allocations are
  * quantized into a fixed set of size classes, the sizes of which are an
- * implementation detail documented here to shed light on the algorthms that
+ * implementation detail documented here to shed light on the algorithms that
  * compute size classes.  Request sizes are rounded up to the nearest size in
  * the relevant SMART_SIZES table; e.g. 17 is rounded up to 32.  There are
  * 2^LG_SMART_SIZES_PER_DOUBLING size classes for each doubling of size
@@ -340,6 +341,45 @@ struct MemBlock {
   size_t size; // bytes
 };
 
+// allocator for slabs and big blocks
+struct BigHeap {
+  struct iterator;
+  BigHeap() {}
+  bool empty() const {
+    return m_slabs.empty() && m_bigs.empty();
+  }
+
+  // return true if ptr points into one of the slabs
+  bool contains(void* ptr) const;
+
+  // allocate a MemBlock of at least size bytes, track in m_slabs.
+  MemBlock allocSlab(size_t size);
+
+  // allocation api for big blocks. These get a BigNode header and
+  // are tracked in m_bigs
+  MemBlock allocBig(size_t size, HeaderKind kind);
+  MemBlock callocBig(size_t size);
+  MemBlock resizeBig(void* p, size_t size);
+  void freeBig(void*);
+
+  // free all slabs and big blocks
+  void reset();
+
+  // Release auxiliary structures to prepare to be idle for a while
+  void flush();
+
+  // allow whole-heap iteration
+  iterator begin();
+  iterator end();
+
+ private:
+  void enlist(BigNode*, HeaderKind kind, size_t size);
+
+ private:
+  std::vector<MemBlock> m_slabs;
+  std::vector<BigNode*> m_bigs;
+};
+
 //////////////////////////////////////////////////////////////////////
 
 struct MemoryManager {
@@ -458,7 +498,6 @@ struct MemoryManager {
   void smartFreeSizeLogged(void* p, uint32_t size);
   void* objMallocLogged(size_t size);
   void objFreeLogged(void* vp, size_t size);
-  void* smartMallocSizeLoggedTracked(uint32_t size);
   template<bool callerSavesActualSize>
   MemBlock smartMallocSizeBigLogged(size_t size);
   void smartFreeSizeBigLogged(void* vp, size_t size);
@@ -480,7 +519,7 @@ struct MemoryManager {
   /*
    * Returns true if there are no allocated slabs
    */
-  bool empty() const { return m_slabs.empty(); }
+  bool empty() const { return m_heap.empty(); }
 
   /*
    * Release all the request-local allocations.  Zeros all the free
@@ -490,6 +529,12 @@ struct MemoryManager {
    * This is called after sweep in the end-of-request path.
    */
   void resetAllocator();
+
+  /*
+   * Prepare for being idle for a while by releasing or madvising
+   * as much as possible.
+   */
+  void flush();
 
   /*
    * Reset all stats that are synchronzied externally from the memory manager.
@@ -571,19 +616,13 @@ struct MemoryManager {
    * It is then possible to iterate them by iterating the memory manager.
    * This entire feature is enabled/disabled by using setObjectTracking(bool).
    */
-  void* trackSlow(void* p);
-  void* untrackSlow(void* p);
-  void* track(void* p);
-  void* untrack(void* p);
   void setObjectTracking(bool val);
   bool getObjectTracking();
 
   /*
    * Iterating the memory manager tracked objects.
    */
-  typedef typename std::unordered_set<void*>::iterator iterator;
-  iterator objects_begin() { return m_instances.begin(); }
-  iterator objects_end() { return m_instances.end(); }
+  template<class Fn> void forEachObject(Fn);
 
   /////////////////////////////////////////////////////////////////////////////
   // Request profiling.
@@ -642,10 +681,9 @@ private:
 private:
   void* slabAlloc(uint32_t bytes, unsigned index);
   void* newSlab(size_t nbytes);
-  void* smartEnlist(BigNode*, size_t nbytes);
+  void  updateBigStats();
   void* smartMallocBig(size_t nbytes);
   void* smartCallocBig(size_t nbytes);
-  void  smartFreeBig(BigNode*);
   void* smartMalloc(size_t nbytes);
   void* smartRealloc(void* ptr, size_t nbytes);
   void  smartFree(void* ptr);
@@ -672,11 +710,11 @@ private:
   void logAllocation(void*, size_t);
   void logDeallocation(void*);
 
-  struct HeapIter;
   void checkHeap();
   void initHole();
-  HeapIter begin();
-  HeapIter end();
+  void initFree();
+  BigHeap::iterator begin();
+  BigHeap::iterator end();
 
 private:
   TRACE_SET_MOD(smartalloc);
@@ -687,17 +725,13 @@ private:
   StringDataNode m_strings; // in-place node is head of circular list
   std::vector<APCLocalArray*> m_apc_arrays;
   MemoryUsageStats m_stats;
-  std::vector<void*> m_slabs;
+  BigHeap m_heap;
   std::vector<NativeNode*> m_natives;
-  std::vector<BigNode*> m_bigs;
 
   bool m_sweeping;
   bool m_trackingInstances;
-  std::unordered_set<void*> m_instances;
-
   bool m_statsIntervalActive;
   bool m_couldOOM{true};
-
   bool m_bypassSlabAlloc;
 
   ReqProfContext m_profctx;
@@ -706,6 +740,7 @@ private:
   static void* TlsInitSetup;
 
 #ifdef USE_JEMALLOC
+  // pointers to jemalloc-maintained allocation counters
   uint64_t* m_allocated;
   uint64_t* m_deallocated;
   uint64_t m_prevAllocated;

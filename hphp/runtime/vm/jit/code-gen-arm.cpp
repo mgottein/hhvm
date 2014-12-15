@@ -17,7 +17,7 @@
 #include "hphp/runtime/vm/jit/code-gen-arm.h"
 #include <vector>
 
-#include "folly/Optional.h"
+#include <folly/Optional.h>
 
 #include "hphp/runtime/ext/ext_collections.h"
 #include "hphp/runtime/ext/ext_generator.h"
@@ -44,7 +44,6 @@ TRACE_SET_MOD(hhir);
 
 NOOP_OPCODE(DefConst)
 NOOP_OPCODE(DefFP)
-NOOP_OPCODE(TrackLoc)
 NOOP_OPCODE(AssertLoc)
 NOOP_OPCODE(Nop)
 NOOP_OPCODE(DefLabel)
@@ -120,7 +119,6 @@ CALL_OPCODE(ConcatIntStr);
 CALL_OPCODE(ConcatStr3);
 CALL_OPCODE(ConcatStr4);
 
-CALL_OPCODE(TypeProfileFunc)
 CALL_OPCODE(CreateCont)
 CALL_OPCODE(CreateAFWH)
 CALL_OPCODE(CreateSSWH)
@@ -132,7 +130,6 @@ CALL_OPCODE(NewVArray)
 CALL_OPCODE(NewMIArray)
 CALL_OPCODE(NewMSArray)
 CALL_OPCODE(NewLikeArray)
-CALL_OPCODE(NewPackedArray)
 CALL_OPCODE(AllocPackedArray)
 CALL_OPCODE(NewCol)
 CALL_OPCODE(Clone)
@@ -279,8 +276,6 @@ PUNT_OPCODE(CheckLoc)
 PUNT_OPCODE(CastStk)
 PUNT_OPCODE(CastStkIntToDbl)
 PUNT_OPCODE(CoerceStk)
-PUNT_OPCODE(CheckDefinedClsEq)
-PUNT_OPCODE(TryEndCatch)
 PUNT_OPCODE(UnwindCheckSideExit)
 PUNT_OPCODE(LdUnwinderValue)
 PUNT_OPCODE(DeleteUnwinderException)
@@ -983,7 +978,8 @@ void CodeGenerator::cgCallNative(Vout& v, IRInstruction* inst) {
       case DestType::None:  return kVoidDest;
       case DestType::TV:
       case DestType::SIMD:  return callDestTV(inst);
-      case DestType::SSA:   return callDest(inst);
+      case DestType::SSA:
+      case DestType::Byte:  return callDest(inst);
       case DestType::Dbl:   return callDestDbl(inst);
     }
     not_reached();
@@ -1032,6 +1028,7 @@ void CodeGenerator::cgCallHelper(Vout& v,
     case DestType::TV: CG_PUNT(cgCall-ReturnTV);
     case DestType::SIMD: CG_PUNT(cgCall-ReturnSIMD);
     case DestType::SSA:
+    case DestType::Byte:
       assert(dstReg1 == InvalidReg);
       v << copy{PhysReg(vixl::x0), dstReg0};
       break;
@@ -1061,7 +1058,8 @@ CallDest CodeGenerator::callDest(Vreg reg0, Vreg reg1) const {
 CallDest CodeGenerator::callDest(const IRInstruction* inst) const {
   if (!inst->numDsts()) return kVoidDest;
   auto loc = dstLoc(0);
-  return { DestType::SSA, loc.reg(0), loc.reg(1) };
+  return { inst->dst()->isA(Type::Bool) ? DestType::Byte : DestType::SSA,
+           loc.reg(0), loc.reg(1) };
 }
 
 CallDest CodeGenerator::callDestTV(const IRInstruction* inst) const {

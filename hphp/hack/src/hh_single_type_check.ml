@@ -20,15 +20,12 @@ type options = {
   suggest : bool;
   color : bool;
   coverage : bool;
+  prolog : bool;
   rest : string list
 }
 
 let builtins_filename = "builtins.hhi"
 let builtins = "<?hh // decl\n"^
-  "class Object {\n"^
-  "  public function get_class(): string {} \n"^
-  "  public function get_parent_class(): ?string {} \n"^
-  "}\n"^
   "interface Traversable<Tv> {}\n"^
   "interface Container<Tv> extends Traversable<Tv> {}\n"^
   "interface Iterator<Tv> extends Traversable<Tv> {}\n"^
@@ -38,17 +35,27 @@ let builtins = "<?hh // decl\n"^
   "interface Indexish<Tk, Tv> extends KeyedContainer<Tk, Tv> {}\n"^
   "interface KeyedIterator<Tk, Tv> extends KeyedTraversable<Tk, Tv>, Iterator<Tv> {}\n"^
   "interface KeyedIterable<Tk, Tv> extends KeyedTraversable<Tk, Tv>, Iterable<Tv> {}\n"^
-  "interface Awaitable<T> {}\n"^
+  "interface Awaitable<T> {"^
+  "  public function getWaitHandle(): WaitHandle<T>;"^
+  "}\n"^
   "interface WaitHandle<T> extends Awaitable<T> {}\n"^
-  "interface ConstVector<Tv> extends KeyedIterable<int, Tv>, Indexish<int, Tv>{}\n"^
+  "interface ConstVector<Tv> extends KeyedIterable<int, Tv>, Indexish<int, Tv>{"^
+  "  public function map<Tu>((function(Tv): Tu) $callback): ConstVector<Tu>;"^
+  "}\n"^
   "interface ConstSet<Tv> extends KeyedIterable<mixed, Tv>, Container<Tv>{}\n"^
-  "interface ConstMap<Tk, Tv> extends KeyedIterable<Tk, Tv>, Indexish<Tk, Tv>{}\n"^
+  "interface ConstMap<Tk, Tv> extends KeyedIterable<Tk, Tv>, Indexish<Tk, Tv>{"^
+  "  public function map<Tu>((function(Tv): Tu) $callback): ConstMap<Tk, Tu>;"^
+  "  public function mapWithKey<Tu>((function(Tk, Tv): Tu) $fn): ConstMap<Tk, Tu>;"^
+  "}\n"^
   "final class Vector<Tv> implements ConstVector<Tv>{\n"^
   "  public function map<Tu>((function(Tv): Tu) $callback): Vector<Tu>;\n"^
   "  public function filter((function(Tv): bool) $callback): Vector<Tv>;\n"^
+  "  public function reserve(int $sz): void;"^
   "}\n"^
   "final class ImmVector<Tv> implements ConstVector<Tv> {}\n"^
-  "final class Map<Tk, Tv> implements ConstMap<Tk, Tv> {}\n"^
+  "final class Map<Tk, Tv> implements ConstMap<Tk, Tv> {"^
+  "  public function map<Tu>((function(Tv): Tu) $callback): Map<Tk, Tu>;"^
+  "}\n"^
   "final class ImmMap<Tk, Tv> implements ConstMap<Tk, Tv>{}\n"^
   "final class StableMap<Tk, Tv> implements ConstMap<Tk, Tv> {}\n"^
   "final class Set<Tv> extends ConstSet<Tv> {}\n"^
@@ -108,6 +115,7 @@ let parse_options () =
   let suggest = ref false in
   let color = ref false in
   let coverage = ref false in
+  let prolog = ref false in
   let rest_options = ref [] in
   let rest x = rest_options := x :: !rest_options in
   let usage = Printf.sprintf "Usage: %s filename\n" Sys.argv.(0) in
@@ -121,6 +129,9 @@ let parse_options () =
     "--coverage",
       Arg.Set coverage,
       "Produce coverage output";
+    "--prolog",
+      Arg.Set prolog,
+      "Produce prolog facts";
     "--",
       Arg.Rest rest,
       "";
@@ -133,6 +144,7 @@ let parse_options () =
     suggest = !suggest;
     color = !color;
     coverage = !coverage;
+    prolog = !prolog;
     rest = !rest_options;
   }
 
@@ -156,8 +168,8 @@ let suggest_and_print fn funs classes typedefs consts =
     end
 
 (* This allows to fake having multiple files in one file. This
- * is used only in unit test files. Indeed
- * There are some features that require mutliple files to be tested.
+ * is used only in unit test files.
+ * Indeed, there are some features that require mutliple files to be tested.
  * For example, newtype has a different meaning depending on the file.
  *)
 let rec make_files = function
@@ -226,6 +238,10 @@ let print_coverage fn =
   let counts = ServerCoverageMetric.count_exprs fn !Typing_defs.type_acc in
   ClientCoverageMetric.go false (Some (Leaf counts))
 
+let print_prolog funs classes typedefs consts =
+  let facts = Prolog.facts_of_defs [] funs classes typedefs consts in
+  PrologMain.output_facts stdout facts
+
 (*****************************************************************************)
 (* Main entry point *)
 (*****************************************************************************)
@@ -236,7 +252,7 @@ let print_coverage fn =
  * a given file. You can then inspect this typing environment, e.g.
  * with 'Typing_env.Classes.get "Foo";;'
  *)
-let main_hack { filename; suggest; color; coverage; _ } =
+let main_hack { filename; suggest; color; coverage; prolog; _ } =
   ignore (Sys.signal Sys.sigusr1 (Sys.Signal_handle Typing.debug_print_last_pos));
   SharedMem.init();
   Hhi.set_hhi_root_for_unit_test (Path.mk_path "/tmp/hhi");
@@ -260,6 +276,8 @@ let main_hack { filename; suggest; color; coverage; _ } =
       List.iter (fun (_, fname) -> Typing_check_service.type_fun fname) funs;
       List.iter (fun (_, cname) -> Typing_check_service.type_class cname) classes;
       List.iter (fun (_, x) -> Typing_check_service.check_typedef x) typedefs;
+      if prolog
+      then print_prolog funs classes typedefs consts;
       if color
       then print_colored filename;
       if coverage
@@ -268,9 +286,11 @@ let main_hack { filename; suggest; color; coverage; _ } =
       then suggest_and_print filename funs classes typedefs consts
     end
   in
-  if errors <> []
-  then error (List.hd errors)
-  else Printf.printf "No errors\n"
+  if not prolog then begin
+    if errors <> []
+    then error (List.hd errors)
+    else Printf.printf "No errors\n"
+  end
 
 (* command line driver *)
 let _ =

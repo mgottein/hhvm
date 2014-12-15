@@ -16,6 +16,7 @@
 */
 
 #include "hphp/runtime/ext/zlib/ext_zlib.h"
+#include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/file.h"
 #include "hphp/runtime/base/mem-file.h"
 #include "hphp/runtime/ext/zlib/zip-file.h"
@@ -25,7 +26,7 @@
 #include "hphp/runtime/vm/native-data.h"
 #include "hphp/util/compression.h"
 #include "hphp/util/logger.h"
-#include "folly/String.h"
+#include <folly/String.h>
 #ifdef HAVE_SNAPPY
 #include <snappy.h>
 #endif
