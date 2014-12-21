@@ -76,6 +76,16 @@ class Phar extends RecursiveDirectoryIterator
     $data = file_get_contents($filename);
 
     $halt_token = "__HALT_COMPILER();";
+    //$zip_magic = "PK\x03\x04";
+    $gz_magic = "\x1f\x8b\x08";
+    //$bz_magic = "BZh";
+
+    //check for compression
+    //TODO check for all forms + repeatedly check like in php
+    if (strncmp($gz_magic, $data, strlen($gz_magic)) == 0) {
+      $data = gzdecode($data);
+    }
+
     $pos = strpos($data, $halt_token);
     if ($pos === false && !self::$preventHaltTokenCheck) {
       throw new PharException("__HALT_COMPILER(); must be declared in a phar");
@@ -1149,6 +1159,7 @@ class Phar extends RecursiveDirectoryIterator
    * Called from C++.
    */
   private static function openPhar($full_filename) {
+    var_dump("open phar called");
     list($phar, $filename) = self::getPharAndFile($full_filename);
     return $phar->getFileData($filename);
   }
