@@ -22,10 +22,12 @@
 #include "hphp/runtime/base/zend-functions.h"
 #include "hphp/runtime/ext/ext_closure.h"
 #include "hphp/runtime/ext/ext_collections.h"
+#include "hphp/runtime/ext/hh/ext_hh.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
 #include "hphp/runtime/vm/jit/mc-generator-internal.h"
 #include "hphp/runtime/vm/jit/mc-generator.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
+#include "hphp/runtime/vm/jit/unwind-x64.h"
 #include "hphp/runtime/vm/member-operations.h"
 #include "hphp/runtime/vm/minstr-state.h"
 #include "hphp/runtime/vm/type-constraint.h"
@@ -254,6 +256,13 @@ StringData* convResToStrHelper(ResourceData* o) {
   auto r = s.get();
   if (!r->isStatic()) r->incRefCount();
   return r;
+}
+
+TypedValue getMemoKeyHelper(TypedValue tv) {
+  auto var = HHVM_FN(serialize_memoize_param)(tvAsCVarRef(&tv));
+  auto res = var.asTypedValue();
+  tvRefcountedIncRef(res);
+  return *res;
 }
 
 inline void coerceCellFail(DataType expected, DataType actual, int64_t argNum,
@@ -1254,9 +1263,9 @@ void registerLiveObj(ObjectData* obj) {
   g_context->m_liveBCObjs.insert(obj);
 }
 
-void unwindResumeHelper(_Unwind_Exception* data) {
+void unwindResumeHelper() {
   tl_regState = VMRegState::CLEAN;
-  _Unwind_Resume(data);
+  _Unwind_Resume(unwindRdsInfo->exn);
 }
 
 namespace MInstrHelpers {

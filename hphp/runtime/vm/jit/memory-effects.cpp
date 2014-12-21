@@ -86,14 +86,12 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ReqBindJmpGte:
   case ReqBindJmpGteInt:
   case ReqBindJmpGtInt:
-  case ReqBindJmpInstanceOfBitmask:
   case ReqBindJmpLt:
   case ReqBindJmpLte:
   case ReqBindJmpLteInt:
   case ReqBindJmpLtInt:
   case ReqBindJmpNeq:
   case ReqBindJmpNeqInt:
-  case ReqBindJmpNInstanceOfBitmask:
   case ReqBindJmpNSame:
   case ReqBindJmpNZero:
   case ReqBindJmpSame:
@@ -108,12 +106,10 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case SideExitJmpGtInt:
   case SideExitJmpGte:
   case SideExitJmpGteInt:
-  case SideExitJmpInstanceOfBitmask:
   case SideExitJmpLt:
   case SideExitJmpLtInt:
   case SideExitJmpLte:
   case SideExitJmpLteInt:
-  case SideExitJmpNInstanceOfBitmask:
   case SideExitJmpNSame:
   case SideExitJmpNZero:
   case SideExitJmpNeq:
@@ -128,18 +124,20 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   // Unusual instructions
 
   /*
-   * The FunctionReturnHook sets up the ActRec so the unwinder knows everything
-   * is already released (i.e. it calls ar->setLocalsDecRefd()).
+   * The ReturnHook sets up the ActRec so the unwinder knows everything is
+   * already released (i.e. it calls ar->setLocalsDecRefd()).
    *
    * So it has no upward exposed uses of locals, even though it has a catch
    * block as a successor that looks like it can use any locals (and in fact it
    * can, if it weren't for this instruction).
    */
-  case FunctionReturnHook:
+  case ReturnHook:
     return KillFrameLocals { inst.src(0) };
 
-  // The suspend hook can load anything, but can't write to frame locals.
-  case FunctionSuspendHook:
+  // The suspend hooks can load anything (re-entering the VM), but can't write
+  // to frame locals.
+  case SuspendHookE:
+  case SuspendHookR:
     return MayLoadStore { AUnknown, ANonFrame };
 
   /*
@@ -641,9 +639,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case StAsyncArSucceeded:
   case InstanceOf:
   case InstanceOfBitmask:
-  case JmpInstanceOfBitmask:
   case NInstanceOfBitmask:
-  case JmpNInstanceOfBitmask:
   case InstanceOfIface:
   case InterfaceSupportsArr:
   case InterfaceSupportsDbl:
@@ -820,6 +816,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ArrayIsset:     // kVPackedKind warnings
   case ArraySet:       // kVPackedKind warnings
   case ArraySetRef:    // kVPackedKind warnings
+  case GetMemoKey:  // re-enters to call getInstanceKey() in some cases
     return MayLoadStore { ANonFrame, ANonFrame };
 
   //////////////////////////////////////////////////////////////////////

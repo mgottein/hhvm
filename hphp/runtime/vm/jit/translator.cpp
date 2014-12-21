@@ -482,6 +482,7 @@ static const struct {
   { OpAssertRATL,  {None,             None,         OutNone,           0 }},
   { OpAssertRATStk,{None,             None,         OutNone,           0 }},
   { OpBreakTraceHint,{None,           None,         OutNone,           0 }},
+  { OpGetMemoKey,  {Stack1,           Stack1,       OutUnknown,        0 }},
 
   /*** 14. Generator instructions ***/
 
@@ -1023,6 +1024,7 @@ bool dontGuardAnyInputs(Op op) {
   case Op::False:
   case Op::File:
   case Op::Floor:
+  case Op::GetMemoKey:
   case Op::Idx:
   case Op::InitThisLoc:
   case Op::InstanceOf:
@@ -1352,7 +1354,7 @@ static void setSuccIRBlocks(HTS& hts,
  * this succeeds, else false.
  */
 static bool tryTranslateSingletonInline(HTS& hts,
-                                        const NormalizedInstruction& i,
+                                        const NormalizedInstruction& ninst,
                                         const Func* funcd) {
   using Atom = BCPattern::Atom;
   using Captures = BCPattern::CaptureVec;
@@ -1360,10 +1362,10 @@ static bool tryTranslateSingletonInline(HTS& hts,
   if (!funcd) return false;
 
   // Make sure we have an acceptable FPush and non-null callee.
-  assert(i.op() == Op::FPushFuncD ||
-         i.op() == Op::FPushClsMethodD);
+  assert(ninst.op() == Op::FPushFuncD ||
+         ninst.op() == Op::FPushClsMethodD);
 
-  auto fcall = i.nextSk();
+  auto fcall = ninst.nextSk();
 
   // Check if the next instruction is an acceptable FCall.
   if ((fcall.op() != Op::FCall && fcall.op() != Op::FCallD) ||
@@ -1404,6 +1406,7 @@ static bool tryTranslateSingletonInline(HTS& hts,
 
   if (result.found()) {
     try {
+      irgen::prepareForNextHHBC(hts, nullptr, ninst.offset(), false);
       irgen::inlSingletonSLoc(
         hts,
         funcd,
@@ -1461,6 +1464,7 @@ static bool tryTranslateSingletonInline(HTS& hts,
 
   if (result.found()) {
     try {
+      irgen::prepareForNextHHBC(hts, nullptr, ninst.offset(), false);
       irgen::inlSingletonSProp(
         hts,
         funcd,
@@ -1636,7 +1640,7 @@ void translateInstr(HTS& hts, const NormalizedInstruction& ni) {
   irgen::emitIncStat(hts, Stats::Instr_TC, 1);
 
   if (RuntimeOption::EvalHHIRGenerateAsserts >= 2) {
-    hts.irb->gen(DbgAssertRetAddr);
+    irgen::gen(hts, DbgAssertRetAddr);
   }
 
   if (isAlwaysNop(ni.op())) {
@@ -1679,7 +1683,7 @@ TranslateResult translateRegion(HTS& hts,
     auto const irBlock = blockIdToIRBlock[region.entry()->id()];
     always_assert(irBlock != entry);
 
-    irb.gen(Jmp, irBlock);
+    irgen::gen(hts, Jmp, irBlock);
   }
 
   RegionDesc::BlockIdSet processedBlocks;
@@ -1759,7 +1763,7 @@ TranslateResult translateRegion(HTS& hts,
 
       // Finish emitting guards, and emit profiling counters.
       if (useGuards) {
-        irb.gen(EndGuards);
+        irgen::gen(hts, EndGuards);
         if (RuntimeOption::EvalJitTransCounters) {
           irgen::incTransCounter(hts);
         }

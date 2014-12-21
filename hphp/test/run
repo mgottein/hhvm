@@ -57,6 +57,9 @@ Examples:
   # Slow tests in interp mode:
   % $argv[0] -m interp test/slow
 
+  # PHP specificaion tests in JIT mode:
+  % $argv[0] test/spec
+
   # Slow closure tests in JIT mode:
   % $argv[0] test/slow/closure
 
@@ -188,6 +191,8 @@ function get_options($argv) {
     'log' => 'l',
     'failure-file:' => '',
     'arm' => '',
+    'llvm' => '',
+    'force-llvm' => '',
     'bccf' => '',
     'hhas-round-trip' => '',
     'color' => 'c',
@@ -237,6 +242,7 @@ function map_convenience_filename($file) {
   $mappage = array(
     'quick'      => 'hphp/test/quick',
     'slow'       => 'hphp/test/slow',
+    'spec'       => 'hphp/test/spec',
     'debugger'   => 'hphp/test/server/debugger/tests',
     'http'       => 'hphp/test/server/http/tests',
     'fastcgi'    => 'hphp/test/server/fastcgi/tests',
@@ -279,7 +285,7 @@ function find_tests($files, array $options = null) {
     $files = array('quick');
   }
   if ($files == array('all')) {
-    $files = array('quick', 'slow', 'zend', 'fastcgi');
+    $files = array('quick', 'slow', 'spec', 'zend', 'fastcgi');
   }
   foreach ($files as &$file) {
     $file = map_convenience_filename($file);
@@ -348,8 +354,13 @@ function find_file($test, $name) {
 }
 
 function find_file_for_dir($dir, $name) {
-  while (($dir !== '.' && $dir !== '/') && is_dir($dir)) {
-    $dir = realpath($dir);
+  // Handle the case where the $dir might come in as '.' because you
+  // are running the test runner on a file from the same directory as
+  // the test e.g., './mytest.php'. dirname() will give you the '.' when
+  // you actually have a lot of path to traverse upwards like
+  // /home/you/code/tests/mytest.php. Use realpath() to get that.
+  $dir = realpath($dir);
+  while ($dir !== '/' && is_dir($dir)) {
     $file = "$dir/$name";
     if (is_file($file)) {
       return $file;
@@ -415,6 +426,8 @@ function hhvm_cmd_impl() {
     '-vEval.EnableIntrinsicsExtension=true',
     mode_cmd($options),
     isset($options['arm']) ? '-vEval.SimulateARM=1' : '',
+    isset($options['llvm']) ? '-vEval.JitLLVM=2' : '',
+    isset($options['require-llvm']) ? '-vEval.JitLLVM=3' : '',
     isset($options['bccf']) ? '-vEval.HHIRBytecodeControlFlow=1' : '',
     extra_args($options),
   );
@@ -813,7 +826,7 @@ function skip_test($options, $test) {
     2 => array("pipe", "w"),
   );
   $pipes = null;
-  $process = proc_open("$hhvm 2>&1", $descriptorspec, $pipes);
+  $process = proc_open("$hhvm $test 2>&1", $descriptorspec, $pipes);
   if (!is_resource($process)) {
     // This is weird. We can't run HHVM but we probably shouldn't skip the test
     // since on a broken build everything will show up as skipped and give you a
@@ -1436,14 +1449,8 @@ function msg_loop($num_tests, $queue) {
 }
 
 function print_success($tests, $results, $options) {
-  $ran_tests = false;
-  foreach ($results as $result) {
-    if ($result['status'] == 'passed') {
-      $ran_tests = true;
-      break;
-    }
-  }
-  if (!$tests || !$ran_tests) {
+  // We didn't run any tests, not even skipped. Clowntown!
+  if (!$tests) {
     print "\nCLOWNTOWN: No tests!\n";
     if (empty($options['no-fun'])) {
       print <<<CLOWN
@@ -1463,6 +1470,46 @@ CLOWN
 
     /* Emacs' syntax highlighting gets confused by that clown and this comment
      * resets whatever state got messed up. */
+    return;
+  }
+  $ran_tests = false;
+  foreach ($results as $result) {
+    // The result here will either be skipped or passed (since failed is
+    // handled in print_failure
+    if ($result['status'] == 'passed') {
+      $ran_tests = true;
+      break;
+    }
+  }
+  // We just had skipped tests
+  if (!$ran_tests) {
+    print "\nSKIP-ALOO: Only skipped tests!\n";
+    if (empty($options['no-fun'])) {
+      print <<<SKIPPER
+                        .".
+                         /  |
+                        /  /
+                       / ,"
+           .-------.--- /
+          "._ __.-/ o. o\
+             "   (    Y  )
+                  )     /
+                 /     (
+                /       Y
+            .-"         |
+           /  _     \    \
+          /    `. ". ) /' )
+         Y       )( / /(,/
+        ,|      /     )
+       ( |     /     /
+        " \_  (__   (__
+            "-._,)--._,)
+SKIPPER
+        ."\n\n";
+    }
+
+    /* Emacs' syntax highlighting may get confused by the skipper and this
+     * rcomment esets whatever state got messed up. */
     return;
   }
   print "\nAll tests passed.\n";

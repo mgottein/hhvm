@@ -13,8 +13,11 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
+
 #include <type_traits>
 #include <sstream>
+
+#include "hphp/runtime/base/strings.h"
 
 #include "hphp/runtime/ext/ext_collections.h"
 #include "hphp/runtime/vm/jit/minstr-effects.h"
@@ -71,7 +74,6 @@ struct MTS {
     , irb(*hts.irb)
     , unit(hts.unit)
     , mii(getMInstrInfo(effectiveOp))
-    , marker(makeMarker(hts, bcOff(hts)))
     , iInd(mii.valCount())
   {}
   /* implicit */ operator HTS&() { return hts; }
@@ -85,7 +87,6 @@ struct MTS {
   IRBuilder& irb;
   IRUnit& unit;
   MInstrInfo mii;
-  BCMarker marker;
 
   hphp_hash_map<unsigned,unsigned> stackInputs;
 
@@ -1196,7 +1197,8 @@ void emitMPre(MTS& env) {
     // If we're using an MInstrState, all the default-created catch blocks for
     // exception paths from here out will need to clean up the tvRef{,2}
     // storage, so install a custom catch creator.
-    env.irb.setCatchCreator([&] { return makeMISCatch(env); });
+    auto const penv = &env;
+    env.hts.catchCreator = [penv] { return makeMISCatch(*penv); };
   }
 
   /*
@@ -1842,9 +1844,9 @@ void emitFinalMOp(MTS& env) {
 void cleanTvRefs(MTS& env) {
   constexpr ptrdiff_t refOffs[] = { MISOFF(tvRef), MISOFF(tvRef2) };
   for (unsigned i = 0; i < std::min(nLogicalRatchets(env), 2U); ++i) {
-    env.irb.gen(
+    gen(
+      env,
       DecRefMem,
-      env.marker,
       Type::Gen,
       env.misBase,
       cns(env, refOffs[env.failedSetBlock ? 1 - i : i])
@@ -1904,7 +1906,7 @@ void handleStrTestResult(MTS& env) {
 
 Block* makeMISCatch(MTS& env) {
   auto const exit = env.unit.defBlock(Block::Hint::Unused);
-  BlockPusher bp(env.irb, env.marker, exit);
+  BlockPusher bp(env.irb, makeMarker(env, bcOff(env)), exit);
   gen(env, BeginCatch);
   cleanTvRefs(env);
   spillStack(env);
@@ -1918,7 +1920,7 @@ Block* makeCatchSet(MTS& env) {
   const bool isSetWithRef = env.op == Op::SetWithRefLM ||
                             env.op == Op::SetWithRefRM;
 
-  BlockPusher bp(env.irb, env.marker, env.failedSetBlock);
+  BlockPusher bp(env.irb, makeMarker(env, bcOff(env)), env.failedSetBlock);
   gen(env, BeginCatch);
   spillStack(env);
 

@@ -67,15 +67,15 @@ void Vunit::freeScratchBlock(Vlabel l) {
 }
 
 Vreg Vunit::makeConst(uint64_t v) {
-  auto it = cpool.find(v);
-  if (it != cpool.end()) return it->second;
-  return cpool[v] = makeReg();
+  auto it = constants.find(v);
+  if (it != constants.end()) return it->second;
+  return constants[v] = makeReg();
 }
 
 Vreg Vunit::makeConst(bool b) {
-  auto it = cpool.find(b);
-  if (it != cpool.end()) return it->second;
-  return cpool[b] = makeReg();
+  auto it = constants.find(b);
+  if (it != constants.end()) return it->second;
+  return constants[b] = makeReg();
 }
 
 Vreg Vunit::makeConst(double d) {
@@ -241,7 +241,7 @@ private:
   void emit(lea& i);
   void emit(leap& i) { a->lea(i.s, i.d); }
   void emit(loaddqu& i) { a->movdqu(i.s, i.d); }
-  void emit(loadb& i) { a->loadb(i.s, i.d); }
+  void emit(loadtqb& i) { a->loadb(i.s, i.d); }
   void emit(loadl& i) { a->loadl(i.s, i.d); }
   void emit(loadqp& i) { a->loadq(i.s, i.d); }
   void emit(loadsd& i) { a->movsd(i.s, i.d); }
@@ -256,6 +256,7 @@ private:
   void emit(neg& i) { unary(i); a->neg(i.d); }
   void emit(nop& i) { a->nop(); }
   void emit(not& i) { unary(i); a->not(i.d); }
+  void emit(orwim& i) { a->orw(i.s0, i.m); }
   void emit(orq& i) { commuteSF(i); a->orq(i.s0, i.d); }
   void emit(orqi& i) { binary(i); a->orq(i.s0, i.d); }
   void emit(orqim& i) { a->orq(i.s0, i.m); }
@@ -293,13 +294,14 @@ private:
   void emit(subsd& i) { noncommute(i); a->subsd(i.s0, i.d); }
   void emit(testb& i) { a->testb(i.s0, i.s1); }
   void emit(testbi& i) { a->testb(i.s0, i.s1); }
-  void emit(testbim& i) { a->testb(i.s0, i.s1); }
+  void emit(testbim i) { a->testb(i.s0, i.s1); }
+  void emit(testwim& i);
   void emit(testl& i) { a->testl(i.s0, i.s1); }
   void emit(testli& i) { a->testl(i.s0, i.s1); }
-  void emit(testlim& i) { a->testl(i.s0, i.s1); }
+  void emit(testlim i);
   void emit(testq& i) { a->testq(i.s0, i.s1); }
   void emit(testqm& i) { a->testq(i.s0, i.s1); }
-  void emit(testqim& i) { a->testq(i.s0, i.s1); }
+  void emit(testqim& i);
   void emit(ucomisd& i) { a->ucomisd(i.s0, i.s1); }
   void emit(ud2& i) { a->ud2(); }
   void emit(unpcklpd& i) { noncommute(i); a->unpcklpd(i.s0, i.d); }
@@ -344,7 +346,7 @@ private:
   jit::vector<CodeAddress> addrs, points;
   jit::vector<LabelPatch> jccs, jmps, calls, catches;
   jit::vector<PointPatch> ldpoints;
-  jit::hash_map<uint64_t,uint64_t*> cpool;
+  jit::hash_map<uint64_t,uint64_t*> constants;
 };
 
 // prepare a binary op that is not commutative.  s0 must be a different
@@ -640,6 +642,37 @@ void Vgen::emit(syncpoint i) {
          i.fix.pcOffset, i.fix.spOffset);
   mcg->recordSyncPoint(a->frontier(), i.fix.pcOffset,
                        i.fix.spOffset);
+}
+
+void Vgen::emit(testwim& i) {
+  // If there's only 1 byte of meaningful bits in the mask, we can adjust the
+  // pointer offset and use testbim instead.
+  int off = 0;
+  uint16_t newMask = i.s0.w();
+  while (newMask > 0xff && !(newMask & 0xff)) {
+    off++;
+    newMask >>= 8;
+  }
+
+  if (newMask > 0xff) {
+    a->testw(i.s0, i.s1);
+  } else {
+    emit(testbim{int8_t(newMask), i.s1 + off, i.sf});
+  }
+}
+
+void Vgen::emit(testlim i) {
+  a->testl(i.s0, i.s1);
+}
+
+void Vgen::emit(testqim& i) {
+  // The immediate is 32 bits, sign-extended to 64. If the sign bit isn't set,
+  // we can get the same results by emitting a testlim.
+  if (i.s0.l() < 0) {
+    a->testq(i.s0, i.s1);
+  } else {
+    emit(testlim{i.s0, i.s1, i.sf});
+  }
 }
 
 void Vgen::emit(nothrow& i) {
@@ -1144,6 +1177,14 @@ static void lowerForX64(Vunit& unit, const Abi& abi) {
           inst = copy{inst.syncvmsp_.s, rVmSp};
           break;
 
+        case Vinstr::movtqb:
+          inst = copy{inst.movtqb_.s, inst.movtqb_.d};
+          break;
+
+        case Vinstr::movtql:
+          inst = copy{inst.movtql_.s, inst.movtql_.d};
+          break;
+
         case Vinstr::ldretaddr:
           inst = pushm{inst.ldretaddr_.s};
           break;
@@ -1172,7 +1213,7 @@ void Vasm::finishX64(const Abi& abi, AsmInfo* asmInfo) {
   SCOPE_EXIT { busy = false; };
   lowerForX64(m_unit, abi);
 
-  if (!m_unit.cpool.empty()) {
+  if (!m_unit.constants.empty()) {
     foldImms<x64::ImmFolder>(m_unit);
   }
   if (m_unit.needsRegAlloc()) {

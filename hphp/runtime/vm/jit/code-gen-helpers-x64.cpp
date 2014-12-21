@@ -430,7 +430,7 @@ void emitLdLowPtr(Vout& v, Vptr mem, Vreg reg, size_t size) {
   if (size == 8) {
     v << load{mem, reg};
   } else if (size == 4) {
-    v << loadl{mem, reg};
+    v << loadzlq{mem, reg};
   } else {
     not_implemented();
   }
@@ -441,7 +441,9 @@ void emitCmpClass(Vout& v, Vreg sf, const Class* c, Vptr mem) {
   if (size == 8) {
     v << cmpqm{v.cns(c), mem, sf};
   } else if (size == 4) {
-    v << cmplm{v.cns(c), mem, sf};
+    auto lowCns = v.makeReg();
+    v << movtql{v.cns(c), lowCns};
+    v << cmplm{lowCns, mem, sf};
   } else {
     not_implemented();
   }
@@ -452,7 +454,9 @@ void emitCmpClass(Vout& v, Vreg sf, Vreg reg, Vptr mem) {
   if (size == 8) {
     v << cmpqm{reg, mem, sf};
   } else if (size == 4) {
-    v << cmplm{reg, mem, sf};
+    auto lowCls = v.makeReg();
+    v << movtql{reg, lowCls};
+    v << cmplm{lowCls, mem, sf};
   } else {
     not_implemented();
   }
@@ -469,7 +473,7 @@ void emitCmpClass(Vout& v, Vreg sf, Vreg reg1, Vreg reg2) {
   }
 }
 
-void copyTV(Vout& v, Vloc src, Vloc dst) {
+void copyTV(Vout& v, Vloc src, Vloc dst, Type destType) {
   auto src_arity = src.numAllocated();
   auto dst_arity = dst.numAllocated();
   if (dst_arity == 2) {
@@ -483,7 +487,11 @@ void copyTV(Vout& v, Vloc src, Vloc dst) {
     return;
   }
   always_assert(src_arity >= 1);
-  v << copy{src.reg(0), dst.reg(0)};
+  if (src_arity == 2 && destType <= Type::Bool) {
+    v << movtqb{src.reg(0), dst.reg(0)};
+  } else {
+    v << copy{src.reg(0), dst.reg(0)};
+  }
 }
 
 // move 2 gpr to 1 xmm
@@ -519,8 +527,6 @@ ConditionCode opToConditionCode(Opcode opc) {
   case JmpNeqInt:             return CC_NE;
   case JmpSame:               return CC_E;
   case JmpNSame:              return CC_NE;
-  case JmpInstanceOfBitmask:  return CC_NZ;
-  case JmpNInstanceOfBitmask: return CC_Z;
   case JmpZero:               return CC_Z;
   case JmpNZero:              return CC_NZ;
   case ReqBindJmpGt:                 return CC_G;
@@ -537,8 +543,6 @@ ConditionCode opToConditionCode(Opcode opc) {
   case ReqBindJmpNeqInt:             return CC_NE;
   case ReqBindJmpSame:               return CC_E;
   case ReqBindJmpNSame:              return CC_NE;
-  case ReqBindJmpInstanceOfBitmask:  return CC_NZ;
-  case ReqBindJmpNInstanceOfBitmask: return CC_Z;
   case ReqBindJmpZero:               return CC_Z;
   case ReqBindJmpNZero:              return CC_NZ;
   case SideExitJmpGt:                 return CC_G;
@@ -555,8 +559,6 @@ ConditionCode opToConditionCode(Opcode opc) {
   case SideExitJmpNeqInt:             return CC_NE;
   case SideExitJmpSame:               return CC_E;
   case SideExitJmpNSame:              return CC_NE;
-  case SideExitJmpInstanceOfBitmask:  return CC_NZ;
-  case SideExitJmpNInstanceOfBitmask: return CC_Z;
   case SideExitJmpZero:               return CC_Z;
   case SideExitJmpNZero:              return CC_NZ;
   default:

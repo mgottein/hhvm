@@ -402,7 +402,7 @@ inline Vptr Vr<Reg,Kind,Bits>::operator+(size_t d) const {
   O(lea, Inone, U(s), D(d))\
   O(leap, I(s), Un, D(d))\
   O(loaddqu, Inone, U(s), D(d))\
-  O(loadb, Inone, U(s), D(d))\
+  O(loadtqb, Inone, U(s), D(d))\
   O(loadl, Inone, U(s), D(d))\
   O(loadqp, I(s), Un, D(d))\
   O(loadsd, Inone, U(s), D(d))\
@@ -413,11 +413,14 @@ inline Vptr Vr<Reg,Kind,Bits>::operator+(size_t d) const {
   O(movl, Inone, UH(s,d), DH(d,s))\
   O(movzbl, Inone, UH(s,d), DH(d,s))\
   O(movzbq, Inone, UH(s,d), DH(d,s))\
+  O(movtqb, Inone, UH(s,d), DH(d,s))\
+  O(movtql, Inone, UH(s,d), DH(d,s))\
   O(mulsd, Inone, U(s0) U(s1), D(d))\
   O(mul, Inone, U(s0) U(s1), D(d))\
   O(neg, Inone, UH(s,d), DH(d,s) D(sf))\
   O(nop, Inone, Un, Dn)\
   O(not, Inone, UH(s,d), DH(d,s))\
+  O(orwim, I(s0), U(m), D(sf))\
   O(orq, Inone, U(s0) U(s1), D(d) D(sf))\
   O(orqi, I(s0), UH(s1,d), DH(d,s1) D(sf)) \
   O(orqim, I(s0), U(m), D(sf))\
@@ -456,6 +459,7 @@ inline Vptr Vr<Reg,Kind,Bits>::operator+(size_t d) const {
   O(testb, Inone, U(s0) U(s1), D(sf))\
   O(testbi, I(s0), U(s1), D(sf))\
   O(testbim, I(s0), U(s1), D(sf))\
+  O(testwim, I(s0), U(s1), D(sf))\
   O(testl, Inone, U(s0) U(s1), D(sf))\
   O(testli, I(s0), U(s1), D(sf))\
   O(testlim, I(s0), U(s1), D(sf))\
@@ -615,7 +619,7 @@ struct jmpm { Vptr target; RegSet args; };
 struct lea { Vptr s; Vreg64 d; };
 struct leap { RIPRelativeRef s; Vreg64 d; };
 struct loaddqu { Vptr s; Vreg128 d; };
-struct loadb { Vptr s; Vreg8 d; };
+struct loadtqb { Vptr s; Vreg8 d; };
 struct loadl { Vptr s; Vreg32 d; };
 struct loadqp { RIPRelativeRef s; Vreg64 d; };
 struct loadsd { Vptr s; VregDbl d; };
@@ -626,10 +630,13 @@ struct movb { Vreg8 s, d; };
 struct movl { Vreg32 s, d; };
 struct movzbl { Vreg8 s; Vreg32 d; };
 struct movzbq { Vreg8 s; Vreg64 d; };
+struct movtqb { Vreg64 s; Vreg8 d; };
+struct movtql { Vreg64 s; Vreg32 d; };
 struct mulsd  { VregDbl s0, s1, d; };
 struct neg { Vreg64 s, d; VregSF sf; };
 struct nop {};
 struct not { Vreg64 s, d; };
+struct orwim { Immed s0; Vptr m; VregSF sf; };
 struct orq { Vreg64 s0, s1, d; VregSF sf; };
 struct orqi { Immed s0; Vreg64 s1, d; VregSF sf; };
 struct orqim { Immed s0; Vptr m; VregSF sf; };
@@ -668,6 +675,7 @@ struct subsd { VregDbl s0, s1, d; };
 struct testb { Vreg8 s0, s1; VregSF sf; };
 struct testbi { Immed s0; Vreg8 s1; VregSF sf; };
 struct testbim { Immed s0; Vptr s1; VregSF sf; };
+struct testwim { Immed s0; Vptr s1; VregSF sf; };
 struct testl { Vreg32 s0, s1; VregSF sf; };
 struct testli { Immed s0; Vreg32 s1; VregSF sf; };
 struct testlim { Immed s0; Vptr s1; VregSF sf; };
@@ -828,28 +836,17 @@ struct Vunit {
   Vlabel entry;
   jit::vector<Vblock> blocks;
 
-  /*
-   * Vasm constant: 1 or 8 byte unsigned value.
-   */
+  // Vasm constant: 1 or 8 byte unsigned value.
   struct Cns {
     struct Hash {
       size_t operator()(Cns c) const {
         return std::hash<uint64_t>()(c.val) ^ c.isByte;
       }
     };
-
-    Cns()
-      : val(0), isByte(false)
-    {}
-
-    /* implicit */ Cns(bool b)
-      : val(b), isByte(true) {}
-
-    /* implicit */ Cns(uint8_t b)
-      : val(b), isByte(true) {}
-
-    /* implicit */ Cns(uint64_t i)
-      : val(i), isByte(false) {}
+    Cns() : val(0), isByte(false) {}
+    /* implicit */ Cns(bool b) : val(b), isByte(true) {}
+    /* implicit */ Cns(uint8_t b) : val(b), isByte(true) {}
+    /* implicit */ Cns(uint64_t i) : val(i), isByte(false) {}
 
     bool operator==(Cns other) const {
       return val == other.val && isByte == other.isByte;
@@ -859,7 +856,7 @@ struct Vunit {
     bool isByte;
   };
 
-  jit::hash_map<Cns,Vreg,Cns::Hash> cpool;
+  jit::hash_map<Cns,Vreg,Cns::Hash> constants;
   jit::vector<VregList> tuples;
   jit::vector<VcallArgs> vcallArgs;
 };

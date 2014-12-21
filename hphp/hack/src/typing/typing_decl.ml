@@ -123,7 +123,7 @@ let add_grand_parents_or_traits parent_pos class_nast acc parent_type =
 let get_class_parent_or_trait class_nast (env, parents, is_complete, is_trait) hint =
   let parent_pos, parent, _ = desugar_class_hint hint in
   let parents = SSet.add parent parents in
-  let env, parent_type = Env.get_class_dep env parent in
+  let parent_type = Env.get_class_dep env parent in
   match parent_type with
   | None ->
       (* The class lives in PHP *)
@@ -144,9 +144,14 @@ let get_class_parents_and_traits env class_nast =
   let acc = env, parents, is_complete, true in
   let env, parents, is_complete, _ =
     List.fold_left (get_class_parent_or_trait class_nast) acc class_nast.c_uses in
+  (* XHP classes whose attributes were imported via "attribute :foo;" syntax *)
+  let acc = env, parents, is_complete, true in
+  let env, parents, is_complete, _ =
+    List.fold_left (get_class_parent_or_trait class_nast) acc class_nast.c_xhp_attr_uses in
   env, parents, is_complete
 
-let merge_single_req req_name env subst inc_req_ty existing_req_opt incoming_pos =
+let merge_single_req req_name env subst inc_req_ty existing_req_opt
+    incoming_pos =
   match existing_req_opt with
     | Some ex_req_ty ->
       (* If multiple uses/impls require the *exact same* ancestor, ... *)
@@ -177,7 +182,7 @@ let merge_parent_class_reqs class_nast impls
     (env, req_ancestors, req_ancestors_extends) parent_hint =
   let parent_pos, parent_name, parent_params = desugar_class_hint parent_hint in
   let env, parent_params = lfold Typing_hint.hint env parent_params in
-  let env, parent_type = Env.get_class_dep env parent_name in
+  let parent_type = Env.get_class_dep env parent_name in
 
   match parent_type with
     | None ->
@@ -223,7 +228,7 @@ let declared_class_req class_nast impls (env, requirements, req_extends) hint =
   let env, req_ty = Typing_hint.hint env hint in
   let req_pos, req_name, req_params = desugar_class_hint hint in
   let env, req_params = lfold Typing_hint.hint env req_params in
-  let env, req_type = Env.get_class_dep env req_name in
+  let req_type = Env.get_class_dep env req_name in
 
   (* for concrete classes, check required ancestors against actual
    * ancestors; for traits and interfaces, the required extends classes
@@ -244,7 +249,6 @@ let declared_class_req class_nast impls (env, requirements, req_extends) hint =
   in
 
   let req_extends = SSet.add req_name req_extends in
-  let env, req_type = Env.get_class_dep env req_name in
   match req_type with
     | None -> (* The class lives in PHP : error?? *)
       let requirements = SMap.add req_name req_ty requirements in
@@ -254,7 +258,7 @@ let declared_class_req class_nast impls (env, requirements, req_extends) hint =
       (* since the req is declared on this class, we should
        * emphatically *not* substitute: a require extends Foo<T> is
        * going to be this class's <T> *)
-      let subst = SMap.empty in
+      let subst = Inst.make_subst [] [] in
       let ex_ty_opt = SMap.get req_name requirements in
       let env, merged = merge_single_req req_name env subst
         req_ty ex_ty_opt req_pos in
@@ -368,6 +372,7 @@ and class_parents_decl class_env c =
   List.iter class_hint c.c_extends;
   List.iter class_hint c.c_implements;
   List.iter class_hint c.c_uses;
+  List.iter class_hint c.c_xhp_attr_uses;
   List.iter class_hint c.c_req_extends;
   List.iter class_hint c.c_req_implements;
   ()
@@ -529,7 +534,7 @@ and class_decl nenv c =
 and trait_exists env acc trait =
   match trait with
     | (_, Happly ((p2, trait), _)) ->
-      let env, class_ = Env.get_class_dep env trait in
+      let class_ = Env.get_class_dep env trait in
       (match class_ with
         | None -> false
         | Some class_ -> acc

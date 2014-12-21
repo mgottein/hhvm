@@ -526,11 +526,11 @@ To int conversions:
 
 | ConvDblToInt,                 D(Int), S(Dbl),                            C
 
-| ConvObjToInt,                 D(Int), S(Obj),                         Er|K
+| ConvObjToInt,                 D(Int), S(Obj),                           Er
 
 | ConvStrToInt,                 D(Int), S(Str),                           NF
 
-| ConvCellToInt,                D(Int), S(Cell),                        Er|K
+| ConvCellToInt,                D(Int), S(Cell),                          Er
 
 
 To object conversions:
@@ -726,10 +726,6 @@ generating efficient compare-and-branch instruction sequences.
 
 | JmpNeqInt,                        ND, S(Int) S(Int),                   B|E
 
-| JmpInstanceOfBitmask,             ND, S(Cls) CStr,                     B|E
-
-| JmpNInstanceOfBitmask,            ND, S(Cls) CStr,                     B|E
-
   Fused jump instructions. These all operate exactly as their corresponding
   query op, but also take a label to jump to when the condition is true.
 
@@ -754,13 +750,19 @@ generating efficient compare-and-branch instruction sequences.
   Tests the implementation-specific surprise flags. If they're true, branches
   to block B.
 
-| FunctionReturnHook, ND, S(FramePtr) S(Gen), Er|E
+| ReturnHook, ND, S(FramePtr) S(Gen), Er|E
 
   Suprise flag hook for function returns.
 
-| FunctionSuspendHook, ND, S(FramePtr) C(Bool), Er|E
+| SuspendHookE, ND, S(FramePtr) S(FramePtr), Er|E
 
-  Suprise flag hook for suspending async functions.
+  Suprise flag hook for suspending eagerly executing async functions or
+  generators.
+
+| SuspendHookR, ND, S(FramePtr) S(Obj|Nullptr), Er|E
+
+  Suprise flag hook for suspending resumed async functions or generators.  For
+  generators, the second parameter should be Nullptr.
 
 | Halt, ND, NA, T|E
 
@@ -1318,7 +1320,7 @@ generating efficient compare-and-branch instruction sequences.
 
   Unlinks a frame constructed by DefInlineFP.
 
-| CallArray, D(StkPtr), S(StkPtr) S(FramePtr), E|CRc
+| CallArray, D(StkPtr), S(StkPtr) S(FramePtr), E
 
   Invoke function corresponding to the current FPI with array args. S0 points
   to the stack resulting after the ActRec for the function and the array of its
@@ -1516,10 +1518,6 @@ generating efficient compare-and-branch instruction sequences.
 
 | ReqBindJmpNSame,                  ND, S(Gen) S(Gen),                   T|E
 
-| ReqBindJmpInstanceOfBitmask,      ND, S(Cls) CStr,                     T|E
-
-| ReqBindJmpNInstanceOfBitmask,     ND, S(Cls) CStr,                     T|E
-
 | ReqBindJmpZero,                   ND, S(Int,Bool),                     T|E
 
 | ReqBindJmpNZero,                  ND, S(Int,Bool),                     T|E
@@ -1554,10 +1552,6 @@ generating efficient compare-and-branch instruction sequences.
 | SideExitJmpSame,                  ND, S(Int) S(Int),                     E
 
 | SideExitJmpNSame,                 ND, S(Int) S(Int),                     E
-
-| SideExitJmpInstanceOfBitmask,     ND, S(Cls) CStr,                       E
-
-| SideExitJmpNInstanceOfBitmask,    ND, S(Cls) CStr,                       E
 
 | SideExitJmpZero,                  ND, S(Int,Bool),                       E
 
@@ -1824,6 +1818,12 @@ generating efficient compare-and-branch instruction sequences.
 
   Checks if S0 contains the key S1, and returns the result if found. Otherwise
   S2 is returned.
+
+| GetMemoKey, D(Cell), S(Cell), Er|C|PRc
+
+  Given a cell, produces a cell that can be used as a cache key. Valid values
+  for the input include all basic types, arrays and collections, and objects
+  that implement IMemozieParam. Any other type will cause GetMemoKey to throw.
 
 | GenericIdx, D(Cell), S(Cell) S(Cell) S(Cell), E|PRc|Er
 

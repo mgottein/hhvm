@@ -962,7 +962,7 @@ void Variant::unserialize(VariableUnserializer *uns,
     }
     break;
   case 'S':
-    if (uns->getType() == VariableUnserializer::Type::APCSerialize) {
+    if (uns->type() == VariableUnserializer::Type::APCSerialize) {
       union {
         char buf[8];
         StringData *sd;
@@ -975,6 +975,9 @@ void Variant::unserialize(VariableUnserializer *uns,
     break;
   case 'a':
     {
+      // check stack depth to avoid overflow
+      check_native_recursion();
+
       Array v = Array::Create();
       v.unserialize(uns);
       operator=(v);
@@ -1089,6 +1092,9 @@ void Variant::unserialize(VariableUnserializer *uns,
       operator=(obj);
 
       if (size > 0) {
+        // check stack depth to avoid overflow
+        check_native_recursion();
+
         if (type == 'O') {
           // Collections are not allowed
           if (obj->isCollection()) {
@@ -1112,7 +1118,9 @@ void Variant::unserialize(VariableUnserializer *uns,
             see getVariantPtr
           */
           for (int64_t i = size; i--; ) {
-            String key = uns->unserializeKey().toString();
+            Variant v;
+            v.unserialize(uns, Uns::Mode::Key);
+            String key = v.toString();
             int ksize = key.size();
             const char *kdata = key.data();
             int subLen = 0;
@@ -1168,7 +1176,7 @@ void Variant::unserialize(VariableUnserializer *uns,
         throw Exception("Expected '}' but got '%c'", sep);
       }
 
-      if (uns->getType() != VariableUnserializer::Type::DebuggerSerialize ||
+      if (uns->type() != VariableUnserializer::Type::DebuggerSerialize ||
           (cls && cls->instanceCtor() && cls->isCppSerializable())) {
         // Don't call wakeup when unserializing for the debugger, except for
         // natively implemented classes.
@@ -1182,7 +1190,7 @@ void Variant::unserialize(VariableUnserializer *uns,
     break;
   case 'C':
     {
-      if (uns->getType() == VariableUnserializer::Type::DebuggerSerialize) {
+      if (uns->type() == VariableUnserializer::Type::DebuggerSerialize) {
         raise_error("Debugger shouldn't call custom unserialize method");
       }
       String clsName;

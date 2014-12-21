@@ -68,7 +68,7 @@ let rec instantiate_fun env fty el =
       let env, ft = instantiate_ft env ft in
       let fty = r, Tfun ft in
       env, fty
-  | r, Tapply ((_, x), argl) when Typing_env.is_typedef env x ->
+  | r, Tapply ((_, x), argl) when Typing_env.is_typedef x ->
       let env, fty = TUtils.expand_typedef env r x argl in
       instantiate_fun env fty el
   | _, (Tany | Tmixed | Tarray (_, _) | Tprim _ | Tgeneric (_, _) | Toption _
@@ -219,7 +219,7 @@ and instantiate_ p subst env = function
           env, Fvariadic (min, (name, var_ty))
         | _ -> env, ft.ft_arity
       in
-      let env, ret  = instantiate subst env ft.ft_ret in
+      let env, ret = instantiate subst env ft.ft_ret in
       let params = List.map2 (fun x y -> x, y) names params in
       env, Tfun { ft with ft_arity = arity; ft_params = params; ft_ret = ret }
   | Tabstract (x, tyl, tcstr) ->

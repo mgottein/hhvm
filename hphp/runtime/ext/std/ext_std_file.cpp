@@ -128,6 +128,12 @@
 # define GLOB_FLAGMASK (~0)
 #endif
 
+#define PHP_GLOB_FLAGS (0 | GLOB_BRACE | GLOB_MARK  \
+                          | GLOB_NOSORT | GLOB_NOCHECK \
+                          | GLOB_NOESCAPE | GLOB_ERR \
+                          | GLOB_ONLYDIR)
+#define PHP_GLOB_FLAGMASK (GLOB_FLAGMASK & PHP_GLOB_FLAGS)
+
 namespace HPHP {
 
 static const StaticString s_STREAM_URL_STAT_LINK("STREAM_URL_STAT_LINK");
@@ -176,6 +182,11 @@ static int statSyscall(
   auto canUseFileCache = useFileCache && isFileStream;
   if (isRelative && !pathIndex) {
     auto fullpath = g_context->getCwd() + String::FromChar('/') + path;
+    if (!ThreadInfo::s_threadInfo->m_reqInjectionData.hasSafeFileAccess() &&
+        !canUseFileCache) {
+      if (strlen(fullpath.data()) != fullpath.size()) return ENOENT;
+      return ::stat(fullpath.data(), buf);
+    }
     std::string realpath = StatCache::realpath(fullpath.data());
     // realpath will return an empty string for nonexistent files
     if (realpath.empty()) {
@@ -1081,7 +1092,7 @@ bool HHVM_FUNCTION(is_dir,
   }
 
   struct stat sb;
-  CHECK_SYSTEM_SILENT(statSyscall(filename, &sb));
+  CHECK_SYSTEM_SILENT(statSyscall(filename, &sb, false));
   return (sb.st_mode & S_IFMT) == S_IFDIR;
 }
 
@@ -1657,7 +1668,10 @@ Variant HHVM_FUNCTION(glob,
       cwd_skip = cwd.length() + 1;
     }
   }
-  int nret = glob(work_pattern.data(), flags & GLOB_FLAGMASK, NULL, &globbuf);
+  int nret = glob(work_pattern.data(),
+                  flags & PHP_GLOB_FLAGMASK,
+                  nullptr,
+                  &globbuf);
   if (nret == GLOB_NOMATCH) {
     return empty_array();
   }

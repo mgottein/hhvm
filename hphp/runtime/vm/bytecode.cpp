@@ -84,6 +84,7 @@
 #include "hphp/runtime/ext/asio/static_wait_handle.h"
 #include "hphp/runtime/ext/asio/wait_handle.h"
 #include "hphp/runtime/ext/asio/waitable_wait_handle.h"
+#include "hphp/runtime/ext/hh/ext_hh.h"
 #include "hphp/runtime/ext/reflection/ext_reflection.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
 #include "hphp/runtime/ext/std/ext_std_math.h"
@@ -682,13 +683,13 @@ static std::string toStringElm(const TypedValue* tv) {
       }
       continue;
     case KindOfArray:
-      assert_refcount_realistic_nz(tv->m_data.parr->getCount());
+      assert(check_refcount_nz(tv->m_data.parr->getCount()));
       os << tv->m_data.parr;
       print_count();
       os << ":Array";
       continue;
     case KindOfObject:
-      assert_refcount_realistic_nz(tv->m_data.pobj->getCount());
+      assert(check_refcount_nz(tv->m_data.pobj->getCount()));
       os << tv->m_data.pobj;
       print_count();
       os << ":Object("
@@ -696,7 +697,7 @@ static std::string toStringElm(const TypedValue* tv) {
          << ")";
       continue;
     case KindOfResource:
-      assert_refcount_realistic_nz(tv->m_data.pres->getCount());
+      assert(check_refcount_nz(tv->m_data.pres->getCount()));
       os << tv->m_data.pres;
       print_count();
       os << ":Resource("
@@ -3765,7 +3766,7 @@ OPTBLD_INLINE void ExecutionContext::iopConcat(IOP_ARGS) {
 
   cellAsVariant(*c2) = concat(cellAsVariant(*c2).toString(),
                               cellAsCVarRef(*c1).toString());
-  assert_refcount_realistic_nz(c2->m_data.pstr->getCount());
+  assert(check_refcount_nz(c2->m_data.pstr->getCount()));
   vmStack().popC();
 }
 
@@ -3779,13 +3780,13 @@ OPTBLD_INLINE void ExecutionContext::iopConcatN(IOP_ARGS) {
   if (n == 2) {
     cellAsVariant(*c2) = concat(cellAsVariant(*c2).toString(),
                                 cellAsCVarRef(*c1).toString());
-    assert_refcount_realistic_nz(c2->m_data.pstr->getCount());
+    assert(check_refcount_nz(c2->m_data.pstr->getCount()));
   } else if (n == 3) {
     Cell* c3 = vmStack().indC(2);
     cellAsVariant(*c3) = concat3(cellAsVariant(*c3).toString(),
                                  cellAsCVarRef(*c2).toString(),
                                  cellAsCVarRef(*c1).toString());
-    assert_refcount_realistic_nz(c3->m_data.pstr->getCount());
+    assert(check_refcount_nz(c3->m_data.pstr->getCount()));
   } else /* n == 4 */ {
     Cell* c3 = vmStack().indC(2);
     Cell* c4 = vmStack().indC(3);
@@ -3793,7 +3794,7 @@ OPTBLD_INLINE void ExecutionContext::iopConcatN(IOP_ARGS) {
                                  cellAsCVarRef(*c3).toString(),
                                  cellAsCVarRef(*c2).toString(),
                                  cellAsCVarRef(*c1).toString());
-    assert_refcount_realistic_nz(c4->m_data.pstr->getCount());
+    assert(check_refcount_nz(c4->m_data.pstr->getCount()));
   }
 
   for (int i = 1; i < n; ++i) {
@@ -4964,6 +4965,15 @@ OPTBLD_INLINE void ExecutionContext::iopAKExists(IOP_ARGS) {
   bool result = HHVM_FN(array_key_exists)(tvAsCVarRef(key), tvAsCVarRef(arr));
   vmStack().popTV();
   vmStack().replaceTV<KindOfBoolean>(result);
+}
+
+OPTBLD_INLINE void ExecutionContext::iopGetMemoKey(IOP_ARGS) {
+  NEXT();
+  auto obj = vmStack().topTV();
+  auto var = HHVM_FN(serialize_memoize_param)(tvAsCVarRef(obj));
+  auto res = var.asTypedValue();
+  tvRefcountedIncRef(res);
+  vmStack().replaceTV(*res);
 }
 
 OPTBLD_INLINE void ExecutionContext::iopIdx(IOP_ARGS) {
@@ -6891,12 +6901,6 @@ OPTBLD_INLINE void ExecutionContext::iopCreateCont(IOP_ARGS) {
   assert(!fp->resumed());
   assert(func->isGenerator());
 
-  /*
-   * We must call the FunctionSuspend hook /before/ allocating the generator,
-   * so it doesn't have to decref it.
-   */
-  EventHook::FunctionSuspend(fp, false);
-
   // Create the {Async,}Generator object. Create takes care of copying local
   // variables and iterators.
   auto const gen = func->isAsync()
@@ -6904,6 +6908,8 @@ OPTBLD_INLINE void ExecutionContext::iopCreateCont(IOP_ARGS) {
         c_AsyncGenerator::Create(fp, numSlots, nullptr, resumeOffset))
     : static_cast<BaseGenerator*>(
         c_Generator::Create<false>(fp, numSlots, nullptr, resumeOffset));
+
+  EventHook::FunctionSuspendE(fp, gen->actRec());
 
   // Grab caller info from ActRec.
   ActRec* sfp = fp->sfp();
@@ -6973,7 +6979,7 @@ OPTBLD_INLINE void ExecutionContext::yield(IOP_ARGS,
   assert(fp->resumed());
   assert(func->isGenerator());
 
-  EventHook::FunctionSuspend(fp, true);
+  EventHook::FunctionSuspendR(fp, nullptr);
 
   if (!func->isAsync()) {
     // Non-async generator.
@@ -7069,11 +7075,9 @@ OPTBLD_INLINE void ExecutionContext::asyncSuspendE(IOP_ARGS, int32_t iters) {
     c_AsyncFunctionWaitHandle::Create(vmfp(), vmfp()->func()->numSlotsInFrame(),
                                       nullptr, resumeOffset, child));
 
-  // Call the FunctionSuspend hook. Keep the AsyncFunctionWaitHandle
-  // on the stack so that the unwinder could free it if the hook fails.
-  vmStack().pushObjectNoRc(waitHandle);
-  EventHook::FunctionSuspend(waitHandle->actRec(), false);
-  vmStack().discard();
+  // Call the FunctionSuspend hook. FunctionSuspend will decref the newly
+  // allocated waitHandle if it throws.
+  EventHook::FunctionSuspendE(vmfp(), waitHandle->actRec());
 
   // Grab caller info from ActRec.
   ActRec* sfp = vmfp()->sfp();
@@ -7103,6 +7107,10 @@ OPTBLD_INLINE void ExecutionContext::asyncSuspendR(IOP_ARGS) {
   assert(value.m_data.pobj->instanceof(c_WaitableWaitHandle::classof()));
   auto const child = static_cast<c_WaitableWaitHandle*>(value.m_data.pobj);
 
+  // Before adjusting the stack or doing anything, check the suspend hook.
+  // This can throw.
+  EventHook::FunctionSuspendR(fp, child);
+
   // Await child and suspend the async function/generator. May throw.
   if (!func->isGenerator()) {
     // Async function.
@@ -7123,9 +7131,6 @@ OPTBLD_INLINE void ExecutionContext::asyncSuspendR(IOP_ARGS) {
       assert(!fp->sfp());
     }
   }
-
-  // Call the FunctionSuspend hook.
-  EventHook::FunctionSuspend(fp, true);
 
   // Grab caller info from ActRec.
   ActRec* sfp = fp->sfp();

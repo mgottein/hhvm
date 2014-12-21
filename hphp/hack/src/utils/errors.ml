@@ -97,13 +97,13 @@ module Naming                               = struct
   let add_a_typehint                        = 2001 (* DONT MODIFY!!!! *)
   let typeparam_alok                        = 2002 (* DONT MODIFY!!!! *)
   let assert_arity                          = 2003 (* DONT MODIFY!!!! *)
-  let boolean_instead_of_bool               = 2004 (* DONT MODIFY!!!! *)
+  let primitive_invalid_alias               = 2004 (* DONT MODIFY!!!! *)
   let cyclic_constraint                     = 2005 (* DONT MODIFY!!!! *)
   let did_you_mean_naming                   = 2006 (* DONT MODIFY!!!! *)
   let different_scope                       = 2007 (* DONT MODIFY!!!! *)
   let disallowed_xhp_type                   = 2008 (* DONT MODIFY!!!! *)
-  let double_instead_of_float               = 2009 (* DONT MODIFY!!!! *)
-  (* DEPRECATED: let dynamic_class          = 2010 *)
+  (* DEPRECATED let double_instead_of_float = 2009 *)
+  (* DEPRECATED let dynamic_class           = 2010 *)
   let dynamic_method_call                   = 2011 (* DONT MODIFY!!!! *)
   let error_name_already_bound              = 2012 (* DONT MODIFY!!!! *)
   let expected_collection                   = 2013 (* DONT MODIFY!!!! *)
@@ -121,7 +121,7 @@ module Naming                               = struct
   let illegal_inst_meth                     = 2025 (* DONT MODIFY!!!! *)
   let illegal_meth_caller                   = 2026 (* DONT MODIFY!!!! *)
   let illegal_meth_fun                      = 2027 (* DONT MODIFY!!!! *)
-  let integer_instead_of_int                = 2028 (* DONT MODIFY!!!! *)
+  (* DEPRECATED integer_instead_of_int      = 2028 *)
   let invalid_req_extends                   = 2029 (* DONT MODIFY!!!! *)
   let invalid_req_implements                = 2030 (* DONT MODIFY!!!! *)
   let local_const                           = 2031 (* DONT MODIFY!!!! *)
@@ -133,7 +133,7 @@ module Naming                               = struct
   let naming_too_few_arguments              = 2037 (* DONT MODIFY!!!! *)
   let naming_too_many_arguments             = 2038 (* DONT MODIFY!!!! *)
   let primitive_toplevel                    = 2039 (* DONT MODIFY!!!! *)
-  let real_instead_of_float                 = 2040 (* DONT MODIFY!!!! *)
+  (* DEPRECATED let real_instead_of_float   = 2040 *)
   let shadowed_type_param                   = 2041 (* DONT MODIFY!!!! *)
   let start_with_T                          = 2042 (* DONT MODIFY!!!! *)
   let this_must_be_return                   = 2043 (* DONT MODIFY!!!! *)
@@ -220,7 +220,7 @@ module Typing                               = struct
   let enum_type_typedef_mixed               = 4025 (* DONT MODIFY!!!! *)
   let expected_class                        = 4026 (* DONT MODIFY!!!! *)
   let expected_literal_string               = 4027 (* DONT MODIFY!!!! *)
-  let expected_static_int                   = 4028 (* DONT MODIFY!!!! *)
+  (* DEPRECATED expected_static_int         = 4028 *)
   let expected_tparam                       = 4029 (* DONT MODIFY!!!! *)
   let expecting_return_type_hint            = 4030 (* DONT MODIFY!!!! *)
   let expecting_return_type_hint_suggest    = 4031 (* DONT MODIFY!!!! *)
@@ -249,7 +249,7 @@ module Typing                               = struct
   let missing_assign                        = 4055 (* DONT MODIFY!!!! *)
   let missing_constructor                   = 4056 (* DONT MODIFY!!!! *)
   let missing_field                         = 4057 (* DONT MODIFY!!!! *)
-  let negative_tuple_index                  = 4058 (* DONT MODIFY!!!! *)
+  (* DEPRECATED negative_tuple_index        = 4058 *)
   let self_outside_class                    = 4059 (* DONT MODIFY!!!! *)
   let new_static_inconsistent               = 4060 (* DONT MODIFY!!!! *)
   let static_outside_class                  = 4061 (* DONT MODIFY!!!! *)
@@ -283,13 +283,13 @@ module Typing                               = struct
   let sketchy_null_check_primitive          = 4089 (* DONT MODIFY!!!! *)
   let smember_not_found                     = 4090 (* DONT MODIFY!!!! *)
   let static_dynamic                        = 4091 (* DONT MODIFY!!!! *)
-  let static_overflow                       = 4092 (* DONT MODIFY!!!! *)
+  (* DEPRECATED let static_overflow         = 4092 *)
   let this_in_static                        = 4094 (* DONT MODIFY!!!! *)
   let this_var_outside_class                = 4095 (* DONT MODIFY!!!! *)
   let trait_final                           = 4096 (* DONT MODIFY!!!! *)
   let tuple_arity                           = 4097 (* DONT MODIFY!!!! *)
   let tuple_arity_mismatch                  = 4098 (* DONT MODIFY!!!! *)
-  let tuple_index_too_large                 = 4099 (* DONT MODIFY!!!! *)
+  (* DEPRECATED tuple_index_too_large       = 4099 *)
   let tuple_syntax                          = 4100 (* DONT MODIFY!!!! *)
   let type_arity_mismatch                   = 4101 (* DONT MODIFY!!!! *)
   let type_param_arity                      = 4102 (* DONT MODIFY!!!! *)
@@ -448,29 +448,11 @@ let primitive_toplevel pos =
     longer be referred to in the toplevel namespace."
 )
 
-let integer_instead_of_int pos =
-  add Naming.integer_instead_of_int pos
-    "Invalid Hack type. Using \"integer\" in Hack is considered \
-    an error. Use \"int\" instead, to keep the codebase \
-    consistent."
-
-let boolean_instead_of_bool pos =
-  add Naming.boolean_instead_of_bool pos
-    "Invalid Hack type. Using \"boolean\" in Hack is considered \
-    an error. Use \"bool\" instead, to keep the codebase \
-    consistent."
-
-let double_instead_of_float pos =
-  add Naming.double_instead_of_float pos
-    "Invalid Hack type. Using \"double\" in Hack is considered \
-    an error. Use \"float\" instead. They are equivalent data types \
-    and the codebase remains consistent."
-
-let real_instead_of_float pos =
-  add Naming.real_instead_of_float pos
-    "Invalid Hack type. Using \"real\" in Hack is considered \
-    an error. Use \"float\" instead. They are equivalent data types and \
-    the codebase remains consistent."
+let primitive_invalid_alias pos used valid =
+  add Naming.primitive_invalid_alias pos
+    ("Invalid Hack type. Using '"^used^"' in Hack is considered \
+    an error. Use '"^valid^"' instead, to keep the codebase \
+    consistent.")
 
 let shape_typehint pos =
   add Naming.shape_typehint pos
@@ -1130,10 +1112,6 @@ let array_get_arity pos1 name pos2 =
   pos2, "It is missing its type parameters"
 ]
 
-let static_overflow pos =
-  add Typing.static_overflow pos
-    "Static integer overflow"
-
 let typing_error pos msg =
   add Typing.generic_unify pos msg
 
@@ -1162,18 +1140,6 @@ let const_mutation pos1 pos2 ty =
      if pos2 != Pos.none
      then [(pos2, "This is " ^ ty)]
      else [])
-
-let negative_tuple_index pos =
-  add Typing.negative_tuple_index pos
-    "You cannot use a negative value here"
-
-let tuple_index_too_large pos =
-  add Typing.tuple_index_too_large pos
-    "Cannot access this field"
-
-let expected_static_int pos =
-  add Typing.expected_static_int pos
-    "Please use a static integer"
 
 let expected_class pos =
   add Typing.expected_class pos

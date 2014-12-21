@@ -25,6 +25,7 @@
 #include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/base/type-string.h"
 #include "hphp/runtime/base/typed-value.h"
+#include "hphp/runtime/base/atomic-countable.h"
 #include "hphp/runtime/vm/fixed-string-map.h"
 #include "hphp/runtime/vm/indexed-string-map.h"
 #include "hphp/runtime/vm/instance-bits.h"
@@ -301,10 +302,8 @@ public:
 
   /*
    * Determine if this represents a non-strict subtype of `cls'.
-   *
-   * Returns uint64_t instead of bool because it's called directly from the TC.
    */
-  uint64_t classof(const Class* cls) const;
+  bool classof(const Class* cls) const;
 
   /*
    * Whether this class implements an interface called `name'.
@@ -619,13 +618,6 @@ public:
    * May perform initialization.
    */
   PropLookup<TypedValue*> getSProp(const Class*, const StringData*) const;
-
-  /*
-   * Identical to getSProp(), but the output is boxed.
-   *
-   * Used by the ext_zend_compat layer.
-   */
-  PropLookup<RefData*> zGetSProp(const Class*, const StringData*) const;
 
   /*
    * Return whether or not a declared instance property is accessible from the

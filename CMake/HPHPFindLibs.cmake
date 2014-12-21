@@ -285,7 +285,7 @@ include_directories(${Mcrypt_INCLUDE_DIR})
 find_package(OpenSSL REQUIRED)
 include_directories(${OPENSSL_INCLUDE_DIR})
 
-# reSSL explicitly refuses to support RAND_egd()
+# LibreSSL explicitly refuses to support RAND_egd()
 SET(CMAKE_REQUIRED_LIBRARIES ${OPENSSL_LIBRARIES})
 INCLUDE(CheckCXXSourceCompiles)
 CHECK_CXX_SOURCE_COMPILES("#include <openssl/rand.h>
@@ -533,7 +533,12 @@ macro(hphp_link target)
     target_link_libraries(${target} pcre)
   endif()
 
-  target_link_libraries(${target} fastlz)
+  if (LIBFASTLZ_LIBRARY)
+    target_link_libraries(${target} ${LIBFASTLZ_LIBRARY})
+  else()
+    target_link_libraries(${target} fastlz)
+  endif()
+
   target_link_libraries(${target} timelib)
   target_link_libraries(${target} folly)
 

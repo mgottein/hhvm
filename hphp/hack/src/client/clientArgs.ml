@@ -111,8 +111,6 @@ let parse_check_args cmd =
     (* modes *)
     "--status", Arg.Unit (set_mode MODE_STATUS),
       " (mode) show a human readable list of errors (default)";
-    "--types", Arg.String (fun x -> set_mode (MODE_SHOW_TYPES x) ()),
-      " (mode) show the types for file specified";
     "--type-at-pos", Arg.String (fun x -> set_mode (MODE_TYPE_AT_POS x) ()),
       " (mode) show type at a given position in file [line:character]";
     "--args-at-pos", Arg.String (fun x -> set_mode (MODE_ARGUMENT_INFO x) ()),
@@ -187,8 +185,6 @@ let parse_check_args cmd =
       " (deprecated) equivalent to --from arc_land";
     "--from-check-trunk", Arg.Unit (set_from "check_trunk"),
       " (deprecated) equivalent to --from check_trunk";
-    "--save-state", Arg.String (fun x -> set_mode (MODE_SAVE_STATE x) ()),
-      " <file> debug mode (do not use)";
   ] in
   let args = parse_without_command options usage "check" in
 
@@ -331,6 +327,7 @@ let parse_build_args () =
   let clean_before_build = ref true in
   let incremental = ref false in
   let run_scripts = ref true in
+  let wait = ref false in
   let options = [
     "--steps", Arg.String (fun x ->
       steps := Some (Str.split (Str.regexp ",") x)),
@@ -358,6 +355,8 @@ let parse_build_args () =
     " do not erase previously generated files before building";
     (* Don't document --incremental option for now *)
     "--incremental", Arg.Set incremental, "";
+    "--wait", Arg.Set wait,
+    " wait forever for hh_server intialization (default: false)";
     "--verbose", Arg.Set verbose,
     " guess what";
   ] in
@@ -384,6 +383,7 @@ let parse_build_args () =
       check = !check;
       incremental = !incremental;
       verbose = !verbose;
+      wait = !wait;
     }
   }
 

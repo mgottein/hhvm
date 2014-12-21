@@ -152,6 +152,8 @@ struct IterData : IRExtraData {
     : iterId(iter), keyId(key), valId(val)
   {}
   std::string show() const {
+    if (keyId == -1) return folly::format("{}::{}", iterId, valId).str();
+
     return folly::format("{}::{}::{}", iterId, keyId, valId).str();
   }
 
@@ -903,8 +905,6 @@ X(Call,                         CallData);
 X(CallBuiltin,                  CallBuiltinData);
 X(CallArray,                    CallArrayData);
 X(RetCtrl,                      RetCtrlData);
-X(FunctionSuspendHook,          RetCtrlData);
-X(FunctionReturnHook,           RetCtrlData);
 X(LookupClsCns,                 ClsCnsName);
 X(LookupClsMethodCache,         ClsMethodData);
 X(LdClsMethodCacheFunc,         ClsMethodData);
@@ -931,8 +931,6 @@ X(ReqBindJmpEqInt,              ReqBindJccData);
 X(ReqBindJmpNeqInt,             ReqBindJccData);
 X(ReqBindJmpSame,               ReqBindJccData);
 X(ReqBindJmpNSame,              ReqBindJccData);
-X(ReqBindJmpInstanceOfBitmask,  ReqBindJccData);
-X(ReqBindJmpNInstanceOfBitmask, ReqBindJccData);
 X(ReqBindJmpZero,               ReqBindJccData);
 X(ReqBindJmpNZero,              ReqBindJccData);
 X(SideExitJmpGt,                SideExitJccData);
@@ -949,8 +947,6 @@ X(SideExitJmpEqInt,             SideExitJccData);
 X(SideExitJmpNeqInt,            SideExitJccData);
 X(SideExitJmpSame,              SideExitJccData);
 X(SideExitJmpNSame,             SideExitJccData);
-X(SideExitJmpInstanceOfBitmask, SideExitJccData);
-X(SideExitJmpNInstanceOfBitmask,SideExitJccData);
 X(SideExitJmpZero,              SideExitJccData);
 X(SideExitJmpNZero,             SideExitJccData);
 X(SideExitGuardLoc,             SideExitGuardData);
@@ -1040,8 +1036,8 @@ template<class T> void assert_opcode_extra_same(Opcode opc) {
 #undef O
 }
 
-size_t cseHashExtra(Opcode opc, IRExtraData* data);
-bool cseEqualsExtra(Opcode opc, IRExtraData* a, IRExtraData* b);
+size_t cseHashExtra(Opcode opc, const IRExtraData* data);
+bool cseEqualsExtra(Opcode opc, const IRExtraData* a, const IRExtraData* b);
 IRExtraData* cloneExtra(Opcode opc, IRExtraData* data, Arena& a);
 std::string showExtra(Opcode opc, const IRExtraData* data);
 

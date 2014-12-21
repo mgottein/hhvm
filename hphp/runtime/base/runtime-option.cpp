@@ -138,7 +138,6 @@ int RuntimeOption::ServerPortFd = -1;
 int RuntimeOption::ServerBacklog = 128;
 int RuntimeOption::ServerConnectionLimit = 0;
 int RuntimeOption::ServerThreadCount = 50;
-int RuntimeOption::ProdServerPort = 80;
 int RuntimeOption::QueuedJobsReleaseRate = 3;
 bool RuntimeOption::ServerThreadRoundRobin = false;
 int RuntimeOption::ServerWarmupThrottleRequestCount = 0;
@@ -348,6 +347,12 @@ std::map<std::string, std::string> RuntimeOption::EnvVariables;
 
 std::string RuntimeOption::LightProcessFilePrefix = "./lightprocess";
 int RuntimeOption::LightProcessCount = 0;
+
+int64_t RuntimeOption::HeapSizeMB = 4096; // 4gb
+int64_t RuntimeOption::HeapResetCountBase = 1;
+int64_t RuntimeOption::HeapResetCountMultiple = 2;
+int64_t RuntimeOption::HeapLowWaterMark = 16;
+int64_t RuntimeOption::HeapHighWaterMark = 1024;
 
 #ifdef HHVM_DYNAMIC_EXTENSION_DIR
 std::string RuntimeOption::ExtensionDir = HHVM_DYNAMIC_EXTENSION_DIR;
@@ -890,6 +895,20 @@ void RuntimeOption::Load(IniSetting::Map& ini, Hdf& config,
                  StringData::MaxSize);
     Config::Bind(StringOffsetLimit, ini, rlimit["StringOffsetLimit"],
                  10 * 1024 * 1024);
+    Config::Bind(HeapSizeMB, ini, rlimit["HeapSizeMB"],
+                 HeapSizeMB);
+    Config::Bind(HeapResetCountBase, ini,
+                 rlimit["HeapResetCountBase"],
+                 HeapResetCountBase);
+    Config::Bind(HeapResetCountMultiple, ini,
+                 rlimit["HeapResetCountMultiple"],
+                 HeapResetCountMultiple);
+    Config::Bind(HeapLowWaterMark , ini,
+                 rlimit["HeapLowWaterMark"],
+                 HeapLowWaterMark);
+    Config::Bind(HeapHighWaterMark , ini,
+                 rlimit["HeapHighWaterMark"],
+                 HeapHighWaterMark);
   }
   {
     Hdf repo = config["Repo"];
@@ -1058,9 +1077,6 @@ void RuntimeOption::Load(IniSetting::Map& ini, Hdf& config,
     Config::Bind(ServerConnectionLimit, ini, server["ConnectionLimit"], 0);
     Config::Bind(ServerThreadCount, ini, server["ThreadCount"],
                  Process::GetCPUCount() * 2);
-
-    Config::Bind(ProdServerPort, ini,
-        server["ProdServerPort"], 80);
 
     Config::Bind(ServerThreadRoundRobin, ini, server["ThreadRoundRobin"]);
     Config::Bind(ServerWarmupThrottleRequestCount, ini,

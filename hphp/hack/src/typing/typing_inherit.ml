@@ -48,14 +48,6 @@ let empty = {
   ih_smethods = SMap.empty;
 }
 
-let desugar ih =
-  ih.ih_cstr,
-  ih.ih_consts,
-  ih.ih_cvars,
-  ih.ih_scvars,
-  ih.ih_methods,
-  ih.ih_smethods
-
 (*****************************************************************************)
 (* Functions used to merge an additional inherited class to the types
  * we already inherited.
@@ -244,7 +236,7 @@ let inherit_hack_class c env p class_name class_type argl =
   let env, scvars   = instantiate env class_type.tc_scvars in
   let env, methods  = instantiate env class_type.tc_methods in
   let env, smethods = instantiate env class_type.tc_smethods in
-  let env, cstr     = Env.get_construct env class_type in
+  let cstr          = Env.get_construct env class_type in
   let env, cstr     = constructor env subst cstr in
   let result = {
     ih_cstr     = cstr;
@@ -285,7 +277,7 @@ let inherit_hack_xhp_attrs_only env p class_name class_type argl =
 let from_class c env hint =
   let pos, class_name, class_params = desugar_class_hint hint in
   let env, class_params = lfold Typing_hint.hint env class_params in
-  let env, class_type = Env.get_class_dep env class_name in
+  let class_type = Env.get_class_dep env class_name in
   match class_type with
   | None ->
       (* The class lives in PHP, we don't know anything about it *)
@@ -298,7 +290,7 @@ let from_class c env hint =
 let from_class_constants_only env hint =
   let pos, class_name, class_params = desugar_class_hint hint in
   let env, class_params = lfold Typing_hint.hint env class_params in
-  let env, class_type = Env.get_class_dep env class_name in
+  let class_type = Env.get_class_dep env class_name in
   match class_type with
   | None ->
       (* The class lives in PHP, we don't know anything about it *)
@@ -310,7 +302,7 @@ let from_class_constants_only env hint =
 let from_class_xhp_attrs_only env hint =
   let pos, class_name, class_params = desugar_class_hint hint in
   let env, class_params = lfold Typing_hint.hint env class_params in
-  let env, class_type = Env.get_class_dep env class_name in
+  let class_type = Env.get_class_dep env class_name in
   match class_type with
   | None ->
       (* The class lives in PHP, we don't know anything about it *)

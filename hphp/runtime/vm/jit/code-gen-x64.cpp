@@ -433,10 +433,13 @@ CALL_OPCODE(RestoreErrorLevel)
 
 CALL_OPCODE(Count)
 
-CALL_OPCODE(FunctionSuspendHook)
-CALL_OPCODE(FunctionReturnHook)
+CALL_OPCODE(SuspendHookE)
+CALL_OPCODE(SuspendHookR)
+CALL_OPCODE(ReturnHook)
 
 CALL_OPCODE(OODeclExists)
+
+CALL_OPCODE(GetMemoKey)
 
 #undef NOOP_OPCODE
 
@@ -574,7 +577,7 @@ void CodeGenerator::cgHintStkInner(IRInstruction* inst) {
 }
 
 void CodeGenerator::cgAssertType(IRInstruction* inst) {
-  copyTV(vmain(), srcLoc(inst, 0), dstLoc(inst, 0));
+  copyTV(vmain(), srcLoc(inst, 0), dstLoc(inst, 0), inst->dst()->type());
 }
 
 void CodeGenerator::cgLdUnwinderValue(IRInstruction* inst) {
@@ -588,16 +591,11 @@ void CodeGenerator::cgBeginCatch(IRInstruction* inst) {
   emitIncStat(v, Stats::TC_CatchTrace);
 }
 
-static void callUnwindResumeHelper(Vout& v) {
-  auto exnReg = v.makeReg();
-  v << load{rVmTl[unwinderScratchOff()], exnReg};
-  v << vcall{CppCall::direct(unwindResumeHelper), v.makeVcallArgs({{exnReg}}),
+void CodeGenerator::cgEndCatch(IRInstruction* inst) {
+  auto v = vmain();
+  v << vcall{CppCall::direct(unwindResumeHelper), v.makeVcallArgs({{}}),
              v.makeTuple({})};
   v << ud2{};
-}
-
-void CodeGenerator::cgEndCatch(IRInstruction* inst) {
-  callUnwindResumeHelper(vmain());
 }
 
 void CodeGenerator::cgUnwindCheckSideExit(IRInstruction* inst) {
@@ -615,10 +613,10 @@ void CodeGenerator::cgUnwindCheckSideExit(IRInstruction* inst) {
 
 void CodeGenerator::cgDeleteUnwinderException(IRInstruction* inst) {
   auto& v = vmain();
-  auto exnReg = v.makeReg();
-  v << load{rVmTl[unwinderScratchOff()], exnReg};
+  auto exn = v.makeReg();
+  v << load{rVmTl[unwinderExnOff()], exn};
   v << vcall{CppCall::direct(_Unwind_DeleteException),
-             v.makeVcallArgs({{exnReg}}), v.makeTuple({})};
+             v.makeVcallArgs({{exn}}), v.makeTuple({})};
 }
 
 void CodeGenerator::cgJcc(IRInstruction* inst) {
@@ -894,12 +892,7 @@ CodeGenerator::cgCallHelper(Vout& v, CppCall call, const CallDest& dstInfo,
 
 void CodeGenerator::cgMov(IRInstruction* inst) {
   always_assert(inst->src(0)->numWords() == inst->dst(0)->numWords());
-  auto& v = vmain();
-  if (srcLoc(inst, 0).hasReg(1)) {
-    copyTV(v, srcLoc(inst, 0), dstLoc(inst, 0));
-  } else {
-    v << copy{srcLoc(inst, 0).reg(), dstLoc(inst, 0).reg()};
-  }
+  copyTV(vmain(), srcLoc(inst, 0), dstLoc(inst, 0), inst->dst()->type());
 }
 
 void CodeGenerator::cgAbsDbl(IRInstruction* inst) {
@@ -1649,52 +1642,6 @@ void CodeGenerator::cgNInstanceOfBitmask(IRInstruction* inst) {
   v << setcc{CC_Z, sf, dstLoc(inst, 0).reg()};
 }
 
-void CodeGenerator::cgJmpInstanceOfBitmask(IRInstruction* inst) {
-  auto& v = vmain();
-  auto const sf = emitInstanceBitmaskCheck(v, inst);
-  v << jcc{CC_NZ, sf, {label(inst->next()), label(inst->taken())}};
-}
-
-void CodeGenerator::cgJmpNInstanceOfBitmask(IRInstruction* inst) {
-  auto& v = vmain();
-  auto const sf = emitInstanceBitmaskCheck(v, inst);
-  v << jcc{CC_Z, sf, {label(inst->next()), label(inst->taken())}};
-}
-
-void CodeGenerator::cgReqBindJmpInstanceOfBitmask(IRInstruction* inst) {
-  auto& v = vmain();
-  auto const sf = emitInstanceBitmaskCheck(v, inst);
-  emitReqBindJcc(v, opToConditionCode(inst->op()), sf,
-                 inst->extra<ReqBindJccData>());
-}
-
-void CodeGenerator::cgReqBindJmpNInstanceOfBitmask(IRInstruction* inst) {
-  auto& v = vmain();
-  auto const sf = emitInstanceBitmaskCheck(v, inst);
-  emitReqBindJcc(v, opToConditionCode(inst->op()), sf,
-                 inst->extra<ReqBindJccData>());
-}
-
-void CodeGenerator::cgSideExitJmpInstanceOfBitmask(IRInstruction* inst) {
-  auto const extra = inst->extra<SideExitJccData>();
-  auto const& marker = inst->marker();
-  auto const sk = SrcKey(getFunc(marker), extra->taken, resumed(marker));
-  auto& v = vmain();
-  auto const sf = emitInstanceBitmaskCheck(v, inst);
-  v << bindexit{opToConditionCode(inst->op()), sf, sk, extra->trflags,
-                kCrossTraceRegs};
-}
-
-void CodeGenerator::cgSideExitJmpNInstanceOfBitmask(IRInstruction* inst) {
-  auto const extra = inst->extra<SideExitJccData>();
-  auto const& marker = inst->marker();
-  auto const sk = SrcKey(getFunc(marker), extra->taken, resumed(marker));
-  auto& v = vmain();
-  auto const sf = emitInstanceBitmaskCheck(v, inst);
-  v << bindexit{opToConditionCode(inst->op()), sf, sk, extra->trflags,
-                kCrossTraceRegs};
-}
-
 void CodeGenerator::cgInstanceOf(IRInstruction* inst) {
   auto test = inst->src(1);
   auto testReg = srcLoc(inst, 1).reg();
@@ -1702,8 +1649,13 @@ void CodeGenerator::cgInstanceOf(IRInstruction* inst) {
   auto& v = vmain();
 
   auto call_classof = [&](Vreg dst) {
-    cgCallHelper(v, CppCall::method(&Class::classof),
-    callDest(dst), SyncOptions::kNoSyncPoint, argGroup(inst).ssa(0).ssa(1));
+    cgCallHelper(
+      v,
+      CppCall::method(&Class::classof),
+      {DestType::Byte, dst},
+      SyncOptions::kNoSyncPoint,
+      argGroup(inst).ssa(0).ssa(1)
+    );
     return dst;
   };
 
@@ -1719,8 +1671,8 @@ void CodeGenerator::cgInstanceOf(IRInstruction* inst) {
   cond(v, CC_NZ, sf, destReg, [&](Vout& v) {
     return call_classof(v.makeReg());
   }, [&](Vout& v) {
-    // testReg == 0, set dest to false (0)
-    return testReg;
+    // testReg == 0, set dest to false
+    return v.cns(false);
   });
 }
 
@@ -1754,7 +1706,7 @@ void CodeGenerator::cgExtendsClass(IRInstruction* inst) {
       v << setcc{CC_E, sf, b};
       return b;
     }, [&](Vout& v) {
-      return v.cns(0);
+      return v.cns(false);
     });
   };
 
@@ -1776,7 +1728,7 @@ void CodeGenerator::cgExtendsClass(IRInstruction* inst) {
   }
 
   cond(v, CC_E, sf, rdst, [&](Vout& v) {
-    return v.cns(1);
+    return v.cns(true);
   }, [&](Vout& v) {
     return check_strict_subclass(v.makeReg());
   });
@@ -1894,27 +1846,6 @@ void CodeGenerator::cgConvArrToBool(IRInstruction* inst) {
   );
 }
 
-/*
- * emit something equivalent to testl(val, mr),
- * but with a shorter encoding (eg testb(val, mr))
- * if possible.
- */
-static Vreg testimm(Vout& v, uint32_t val, Vptr mr) {
-  int off = 0;
-  auto val2 = val;
-  while (val2 > 0xff && !(val2 & 0xff)) {
-    off++;
-    val2 >>= 8;
-  }
-  auto const sf = v.makeReg();
-  if (val2 > 0xff) {
-    v << testlim{(int32_t)val, mr, sf};
-  } else {
-    v << testbim{(int8_t)val2, mr + off, sf};
-  }
-  return sf;
-}
-
 void CodeGenerator::cgColIsEmpty(IRInstruction* inst) {
   DEBUG_ONLY auto const ty = inst->src(0)->type();
   assert(ty < Type::Obj &&
@@ -1942,12 +1873,13 @@ void CodeGenerator::cgConvObjToBool(IRInstruction* inst) {
   auto const rsrc = srcLoc(inst, 0).reg();
   auto& v = vmain();
 
-  auto const sf = testimm(v, ObjectData::CallToImpl,
-                          rsrc[ObjectData::attributeOff()]);
+  auto const sf = v.makeReg();
+  v << testwim{ObjectData::CallToImpl, rsrc[ObjectData::attributeOff()], sf};
   unlikelyCond(v, vcold(), CC_NZ, sf, rdst,
     [&] (Vout& v) {
-      auto const sf = testimm(v, ObjectData::IsCollection,
-                              rsrc[ObjectData::attributeOff()]);
+      auto const sf = v.makeReg();
+      v << testwim{ObjectData::IsCollection, rsrc[ObjectData::attributeOff()],
+                   sf};
       return cond(v, CC_NZ, sf, v.makeReg(),
         [&] (Vout& v) { // rsrc points to native collection
           auto dst2 = v.makeReg();
@@ -2725,9 +2657,6 @@ CodeGenerator::cgCheckStaticBitAndDecRef(Vout& v, const IRInstruction* inst,
   }
 
   auto static_check_and_decl = [&](Vout& v) {
-    static_assert(UncountedValue == UNCOUNTED, "");
-    static_assert(StaticValue == STATIC, "");
-
     if (type.needsStaticBitCheck()) {
       auto next = v.makeBlock();
       assert(sf!= InvalidReg);
@@ -3150,9 +3079,10 @@ void CodeGenerator::cgInitObjProps(IRInstruction* inst) {
   // Set the attributes, if any
   int odAttrs = cls->getODAttrs();
   if (odAttrs) {
-    // o_attribute is 16 bits but the fact that we're or-ing a mask makes it ok
+    static_assert(sizeof(ObjectData::Attribute) == 2,
+                  "Codegen expects 2-byte ObjectData attributes");
     assert(!(odAttrs & 0xffff0000));
-    v << orqim{odAttrs, srcReg[ObjectData::attributeOff()], v.makeReg()};
+    v << orwim{odAttrs, srcReg[ObjectData::attributeOff()], v.makeReg()};
   }
 
   // Initialize the properties
@@ -3588,11 +3518,8 @@ void CodeGenerator::cgStaticLocInitCached(IRInstruction* inst) {
   emitStore(rdSrc[RefData::tvOffset()], inst->src(1), srcLoc(inst, 1),
             Width::Full);
   v << inclm{rdSrc[FAST_REFCOUNT_OFFSET], v.makeReg()};
-  if (debug) {
-    static_assert(sizeof(RefData::Magic::kMagic) == sizeof(uint64_t), "");
-    emitImmStoreq(v, static_cast<int64_t>(RefData::Magic::kMagic),
-                  rdSrc[RefData::magicOffset()]);
-  }
+  v << storebi{uint8_t(HeaderKind::Ref), rdSrc[HeaderKindOffset]};
+  static_assert(sizeof(HeaderKind) == 1, "");
 }
 
 void CodeGenerator::emitStoreTypedValue(Vptr dst, SSATmp* src, Vloc loc) {
@@ -3649,7 +3576,7 @@ void CodeGenerator::emitLoad(SSATmp* dst, Vloc dstLoc, Vptr base) {
   }
   auto const dstReg = dstLoc.reg();
   if (type <= Type::Bool) {
-    vmain() << loadb{refTVData(base), dstReg};
+    vmain() << loadtqb{refTVData(base), dstReg};
   } else {
     vmain() << load{refTVData(base), dstReg};
   }
@@ -3695,8 +3622,10 @@ void CodeGenerator::cgStringIsset(IRInstruction* inst) {
   auto idxReg = srcLoc(inst, 1).reg();
   auto dstReg = dstLoc(inst, 0).reg();
   auto& v = vmain();
+  auto const idxTrunc = v.makeReg();
+  v << movtql{idxReg, idxTrunc};
   auto const sf = v.makeReg();
-  v << cmplm{idxReg, strReg[StringData::sizeOff()], sf};
+  v << cmplm{idxTrunc, strReg[StringData::sizeOff()], sf};
   v << setcc{CC_NBE, sf, dstReg};
 }
 
@@ -4101,6 +4030,7 @@ void CodeGenerator::cgDefMIStateBase(IRInstruction* inst) {
 
 void CodeGenerator::cgCheckType(IRInstruction* inst) {
   auto const src   = inst->src(0);
+  auto const dst   = inst->dst();
   auto const rData = srcLoc(inst, 0).reg(0);
   auto const rType = srcLoc(inst, 0).reg(1);
   auto& v = vmain();
@@ -4111,7 +4041,11 @@ void CodeGenerator::cgCheckType(IRInstruction* inst) {
   auto doMov = [&]() {
     auto const valDst = dstLoc(inst, 0).reg(0);
     auto const typeDst = dstLoc(inst, 0).reg(1);
-    v << copy{rData, valDst};
+    if (dst->isA(Type::Bool) && !src->isA(Type::Bool)) {
+      v << movtqb{rData, valDst};
+    } else {
+      v << copy{rData, valDst};
+    }
     if (typeDst != InvalidReg) {
       if (rType != InvalidReg) v << copy{rType, typeDst};
       else v << ldimm{src->type().toDataType(), typeDst};
@@ -4769,6 +4703,7 @@ void CodeGenerator::cgJmp(IRInstruction* inst) {
     v << jmp{target};
     return;
   }
+
   auto& def = inst->taken()->front();
   always_assert(arity == def.numDsts());
   VregList args;
@@ -4778,7 +4713,12 @@ void CodeGenerator::cgJmp(IRInstruction* inst) {
     auto dloc = m_state.locs[def.dst(i)];
     always_assert(sloc.numAllocated() <= dloc.numAllocated());
     always_assert(dloc.numAllocated() >= 1);
-    args.push_back(sloc.reg(0)); // handle value
+    auto valReg = sloc.reg(0);
+    if (src->isA(Type::Bool) && !def.dst(i)->isA(Type::Bool)) {
+      valReg = v.makeReg();
+      v << movzbq{sloc.reg(0), valReg};
+    }
+    args.push_back(valReg); // handle value
     if (dloc.numAllocated() == 2) { // handle type
       auto type = sloc.numAllocated() == 2 ? sloc.reg(1) :
                   v.cns(src->type().toDataType());
@@ -4890,7 +4830,7 @@ void CodeGenerator::cgReleaseVVOrExit(IRInstruction* inst) {
       v << incwm{rVmTl[profile.handle() + offsetof_release], v.makeReg()};
     }
     auto const sf = v.makeReg();
-    v << testlim{ActRec::kExtraArgsBit, rFp[AROFF(m_varEnv)], sf};
+    v << testqim{ActRec::kExtraArgsBit, rFp[AROFF(m_varEnv)], sf};
     emitFwdJcc(v, CC_Z, sf, label);
     cgCallHelper(
       v,
@@ -5217,7 +5157,7 @@ void CodeGenerator::cgIsWaitHandle(IRInstruction* inst) {
   );
   auto& v = vmain();
   auto const sf = v.makeReg();
-  v << testbim{ObjectData::IsWaitHandle, robj[ObjectData::attributeOff()], sf};
+  v << testwim{ObjectData::IsWaitHandle, robj[ObjectData::attributeOff()], sf};
   v << setcc{CC_NZ, sf, rdst};
 }
 

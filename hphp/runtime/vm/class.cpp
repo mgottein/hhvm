@@ -14,24 +14,26 @@
    +----------------------------------------------------------------------+
 */
 
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/complex-types.h"
 #include "hphp/runtime/base/comparisons.h"
-#include "hphp/runtime/base/mixed-array.h"
-#include "hphp/runtime/base/array-init.h"
-#include "hphp/runtime/base/rds.h"
 #include "hphp/runtime/base/enum-cache.h"
+#include "hphp/runtime/base/mixed-array.h"
+#include "hphp/runtime/base/rds.h"
+#include "hphp/runtime/base/strings.h"
 #include "hphp/runtime/ext/string/ext_string.h"
-#include "hphp/util/debug.h"
 #include "hphp/runtime/vm/jit/translator.h"
-#include "hphp/runtime/vm/treadmill.h"
 #include "hphp/runtime/vm/native-data.h"
 #include "hphp/runtime/vm/native-prop-handler.h"
+#include "hphp/runtime/vm/treadmill.h"
 #include "hphp/system/systemlib.h"
+#include "hphp/util/debug.h"
 #include "hphp/util/logger.h"
 #include "hphp/parser/parser.h"
+
 #include <folly/Bits.h>
-#include <iostream>
 #include <algorithm>
+#include <iostream>
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -765,16 +767,6 @@ Class::PropLookup<TypedValue*> Class::getSProp(
   assert(sProp && sProp->m_type != KindOfUninit &&
          "Static property initialization failed to initialize a property.");
   return PropLookup<TypedValue*> { sProp, lookup.accessible };
-}
-
-Class::PropLookup<RefData*> Class::zGetSProp(
-  const Class* ctx,
-  const StringData* sPropName
-) const {
-  auto const lookup = getSProp(ctx, sPropName);
-  if (lookup.prop->m_type != KindOfRef) tvBox(lookup.prop);
-
-  return PropLookup<RefData*> { lookup.prop->m_data.pref, lookup.accessible };
 }
 
 bool Class::IsPropAccessible(const Prop& prop, Class* ctx) {

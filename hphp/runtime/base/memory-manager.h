@@ -32,9 +32,15 @@
 #include "hphp/runtime/base/memory-usage-stats.h"
 #include "hphp/runtime/base/request-event-handler.h"
 
+// used for mmapping contiguous heap space
+// If used, anonymous pages are not cleared when mapped with mmap. It is not
+// enabled by default and should be checked before use
+#define       MAP_UNINITIALIZED 0x4000000 /* XXX Fragile. */
+
 namespace HPHP {
 struct APCLocalArray;
 struct MemoryManager;
+struct ObjectData;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -112,7 +118,8 @@ enum class HeaderKind : uint8_t {
   // ArrayKind aliases
   Packed, Mixed, StrMap, IntMap, VPacked, Empty, Apc, Globals, Proxy,
   // Other ordinary refcounted heap objects
-  String, Object, Resource, Ref,
+  String, Object, ResumableObj, Resource, Ref,
+  Resumable, // ResumableNode followed by Frame, Resumable, ObjectData
   Native, // a NativeData header preceding an HNI ObjectData
   Sweepable, // a Sweepable header preceding an ObjectData ResourceData
   SmallMalloc, // small smart_malloc'd block
@@ -330,9 +337,16 @@ struct FreeNode {
 // for details about memory layout.
 struct NativeNode {
   uint32_t sweep_index; // index in MM::m_natives
-  uint32_t obj_offset;
+  uint32_t obj_offset; // byte offset from this to ObjectData*
   char pad[3];
   HeaderKind kind;
+};
+
+// header for Resumable objects. See layout comment in resumable.h
+struct ResumableNode {
+  size_t framesize;
+  char pad[3];
+  HeaderKind kind; // Resumable
 };
 
 // POD type for tracking arbitrary memory ranges
@@ -372,15 +386,50 @@ struct BigHeap {
   iterator begin();
   iterator end();
 
- private:
+ protected:
   void enlist(BigNode*, HeaderKind kind, size_t size);
 
- private:
+ protected:
   std::vector<MemBlock> m_slabs;
   std::vector<BigNode*> m_bigs;
 };
 
-//////////////////////////////////////////////////////////////////////
+// Contiguous Heap handles allocations and provides a contiguous address space
+// for requests. To turn on build with CONTIGUOUS_HEAP = 1
+struct ContiguousHeap : BigHeap {
+  bool contains(void* ptr) const;
+
+  MemBlock allocSlab(size_t size);
+
+  MemBlock allocBig(size_t size, HeaderKind kind);
+  MemBlock callocBig(size_t size);
+  MemBlock resizeBig(void* p, size_t size);
+  void freeBig(void*);
+
+  void reset();
+
+  void flush();
+
+  ~ContiguousHeap();
+ private:
+  // Contiguous Heap Pointers
+  char* m_base = nullptr;
+  char* m_used;
+  char* m_end;
+  char* m_peak;
+  char* m_OOMMarker;
+  FreeNode m_freeList;
+
+  // Contiguous Heap Counters
+  uint32_t m_requestCount;
+  size_t m_heapUsage;
+  size_t m_contiguousHeapSize;
+
+ private:
+  void* heapAlloc(size_t nbytes, size_t &cap);
+  void  createRequestHeap();
+};
+
 
 struct MemoryManager {
   /*
@@ -725,7 +774,11 @@ private:
   StringDataNode m_strings; // in-place node is head of circular list
   std::vector<APCLocalArray*> m_apc_arrays;
   MemoryUsageStats m_stats;
+#if CONTIGUOUS_HEAP
+  ContiguousHeap m_heap;
+#else
   BigHeap m_heap;
+#endif
   std::vector<NativeNode*> m_natives;
 
   bool m_sweeping;

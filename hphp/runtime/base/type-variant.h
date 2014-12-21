@@ -1078,16 +1078,16 @@ private:
       DT_UNCOUNTED_CASE:
         return;
       case KindOfString:
-        assert_refcount_realistic(m_data.pstr->getCount());
+        assert(check_refcount(m_data.pstr->getCount()));
         return;
       case KindOfArray:
-        assert_refcount_realistic(m_data.parr->getCount());
+        assert(check_refcount(m_data.parr->getCount()));
         return;
       case KindOfObject:
-        assert_refcount_realistic(m_data.pobj->getCount());
+        assert(check_refcount(m_data.pobj->getCount()));
         return;
       case KindOfResource:
-        assert_refcount_realistic(m_data.pres->getCount());
+        assert(check_refcount(m_data.pres->getCount()));
         return;
       case KindOfRef:
       case KindOfClass:
@@ -1160,7 +1160,7 @@ inline Variant &concat_assign(Variant &v1, const String& s2) {
 
 // Defined here for include order reasons.
 inline RefData::~RefData() {
-  assert(m_magic == Magic::kMagic);
+  assert(m_kind == HeaderKind::Ref);
   tvAsVariant(&m_tv).~Variant();
 }
 

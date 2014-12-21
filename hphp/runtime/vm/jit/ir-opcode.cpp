@@ -152,6 +152,19 @@ const StringData* findClassName(SSATmp* cls) {
   return nullptr;
 }
 
+bool isCallOp(Opcode opc) {
+  // CallBuiltin doesn't count because it is not a php-level call.  (It will
+  // call a C++ helper and we can push/pop around it normally.)
+  switch (opc) {
+  case Call:
+  case CallArray:
+  case ContEnter:
+    return true;
+  default:
+    return false;
+  }
+}
+
 bool isGuardOp(Opcode opc) {
   switch (opc) {
     case GuardLoc:
@@ -247,8 +260,6 @@ bool isQueryJmpOp(Opcode opc) {
   case JmpNeqInt:
   case JmpSame:
   case JmpNSame:
-  case JmpInstanceOfBitmask:
-  case JmpNInstanceOfBitmask:
   case JmpZero:
   case JmpNZero:
     return true;
@@ -274,8 +285,6 @@ Opcode queryToJmpOp(Opcode opc) {
   case NeqInt:             return JmpNeqInt;
   case Same:               return JmpSame;
   case NSame:              return JmpNSame;
-  case InstanceOfBitmask:  return JmpInstanceOfBitmask;
-  case NInstanceOfBitmask: return JmpNInstanceOfBitmask;
   default:                 always_assert(0);
   }
 }
@@ -297,8 +306,6 @@ Opcode queryJmpToQueryOp(Opcode opc) {
   case JmpNeqInt:             return NeqInt;
   case JmpSame:               return Same;
   case JmpNSame:              return NSame;
-  case JmpInstanceOfBitmask:  return InstanceOfBitmask;
-  case JmpNInstanceOfBitmask: return NInstanceOfBitmask;
   default:                    always_assert(0);
   }
 }
@@ -319,8 +326,6 @@ Opcode jmpToSideExitJmp(Opcode opc) {
   case JmpNeqInt:             return SideExitJmpNeqInt;
   case JmpSame:               return SideExitJmpSame;
   case JmpNSame:              return SideExitJmpNSame;
-  case JmpInstanceOfBitmask:  return SideExitJmpInstanceOfBitmask;
-  case JmpNInstanceOfBitmask: return SideExitJmpNInstanceOfBitmask;
   case JmpZero:               return SideExitJmpZero;
   case JmpNZero:              return SideExitJmpNZero;
   default:                    always_assert(0);
@@ -343,8 +348,6 @@ Opcode jmpToReqBindJmp(Opcode opc) {
   case JmpNeqInt:             return ReqBindJmpNeqInt;
   case JmpSame:               return ReqBindJmpSame;
   case JmpNSame:              return ReqBindJmpNSame;
-  case JmpInstanceOfBitmask:  return ReqBindJmpInstanceOfBitmask;
-  case JmpNInstanceOfBitmask: return ReqBindJmpNInstanceOfBitmask;
   case JmpZero:               return ReqBindJmpZero;
   case JmpNZero:              return ReqBindJmpNZero;
   default:                    always_assert(0);

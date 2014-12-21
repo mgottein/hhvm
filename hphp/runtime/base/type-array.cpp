@@ -799,12 +799,13 @@ void Array::unserialize(VariableUnserializer *uns) {
     // middle, which breaks references.
     operator=(ArrayInit(size, ArrayInit::Mixed{}).toArray());
     for (int64_t i = 0; i < size; i++) {
-      Variant key(uns->unserializeKey());
+      Variant key;
+      key.unserialize(uns, Uns::Mode::Key);
       if (!key.isString() && !key.isInteger()) {
         throw Exception("Invalid key");
       }
       // for apc, we know the key can't exist, but ignore that optimization
-      assert(uns->getType() != VariableUnserializer::Type::APCSerialize ||
+      assert(uns->type() != VariableUnserializer::Type::APCSerialize ||
              !exists(key, true));
       Variant &value = lvalAt(key, AccessFlags::Key);
       value.unserialize(uns);
